@@ -212,7 +212,8 @@ subroutine readin_parameters
 
   ! Need to decide here since this boolean is needed in def_precomp_terms
   need_fluid_displ = .false.
-  if (dump_vtk .or. dump_xdmf .or. dump_energy .or. dump_wavefields .and. &
+  if (dump_vtk .or. dump_xdmf .or. dump_energy .or. &
+        (dump_wavefields .and. .not. save_bdry_faces) .and. &
         (dump_type=='fullfields' .or. dump_type=='displ_only' &
         .or. dump_type=='strain_only')) then
      ! Need to add this for each new type of wavefield dumping method that 
@@ -394,6 +395,7 @@ subroutine read_inparam_advanced
   do_mesh_tests = .false.
 
   dump_wavefields = .false.
+  save_bdry_faces = .false.
   dump_type = 'fullfields'
   strain_samp = 8
   src_dump_type = 'mask'
@@ -401,6 +403,7 @@ subroutine read_inparam_advanced
   iend = 3
   jbeg = 1
   jend = 3
+  strain_t0 = 0.
 
   kwf_rmin = 0
   kwf_rmax = 7d6
@@ -479,6 +482,9 @@ subroutine read_inparam_advanced
          case('KERNEL_WAVEFIELDS')
              read(keyvalue,*) dump_wavefields
 
+         case('SAVE_BDRY_FACES')
+             read(keyvalue,*) save_bdry_faces
+
          case('KERNEL_DUMPTYPE')
              read(keyvalue,*) dump_type
              dump_type = to_lower(dump_type)
@@ -492,6 +498,14 @@ subroutine read_inparam_advanced
 
          case('KERNEL_SPP')
              read(keyvalue,*) strain_samp
+
+         !nqdu
+         case('DUMP_T0')
+            read(keyvalue,*) strain_t0
+            if(strain_t0 < 0) then
+               print*, 'DUMP_T0 should > 0'
+               stop;
+            endif
 
          case('KERNEL_SOURCE')
              read(keyvalue,*) src_dump_type
@@ -614,10 +628,15 @@ subroutine read_inparam_advanced
   call broadcast_log(diagfiles, 0) 
   call broadcast_log(do_mesh_tests, 0) 
   call broadcast_log(dump_wavefields, 0) 
+  call broadcast_log(save_bdry_faces, 0)
   call broadcast_char(dump_type, 0) 
   
   call broadcast_dble(strain_samp, 0) 
   call broadcast_char(src_dump_type, 0) 
+
+  ! nqdu
+  if(.not. dump_wavefields) strain_t0 = 0.
+  call broadcast_dble(strain_t0,0)
 
   call broadcast_dble(kwf_rmin, 0) 
   call broadcast_dble(kwf_rmax, 0) 
@@ -773,6 +792,8 @@ subroutine check_basic_parameters
 
   errmsg = "KERNEL_WAVEFIELDS can only be written with USE_NETCDF true in inparam_advanced"
   call pcheck(dump_wavefields .and. .not. use_netcdf, errmsg)
+  call pcheck(save_bdry_faces .and. .not. dump_wavefields, &
+              'SAVE_BDRY_FACES requires KERNEL_WAVEFIELDS.')
 
 14 format('  WARNING: Overriding',a19,' with:',f8.3,' seconds')
 
@@ -1088,6 +1109,16 @@ subroutine compute_numerical_parameters
   if (dump_wavefields) then
      nstrain = floor(real(niter)/real(strain_it)) + 1
 
+     ! Count the actual samples for boundary output, including DUMP_T0=0.
+     if (save_bdry_faces .or. strain_t0 > 0.0_dp) then
+         nstrain = 0
+         do i=1,niter
+            if(mod(i,strain_it) == 0 .and. i * deltat > strain_t0) then
+               nstrain = nstrain + 1
+            endif
+         enddo
+     endif
+
      ! This causes problems for massively parallel jobs on parallel file systems 
      ! GPFS allows only a few hundreds of files in one directory
      if (diagfiles) then
@@ -1204,6 +1235,10 @@ subroutine write_parameters
     character(len=10) :: mytime
     character(len=5)  :: myzone
     character(len=24) :: mydatetime
+
+    ! nqdu
+    integer           :: ii
+    real(kind=realkind) ::  my_dump_t0
 
     call date_and_time(mydate, mytime, myzone) 
     write(mydatetime,1212) mydate(1:4), mydate(5:6), mydate(7:8), mytime(1:2), mytime(3:4), mytime(5:6), myzone
@@ -1523,6 +1558,21 @@ subroutine write_parameters
               call nc_write_att_dble(0d0,               'kernel wavefield colatmin')
               call nc_write_att_dble(0d0,               'kernel wavefield colatmax')
            endif
+
+           ! nqdu write starttime  if strain_t0 > 0
+           my_dump_t0 = 0.
+           if(strain_t0 > 0) then
+              do ii = 1,niter
+                 if(mod(ii,strain_it) == 0 .and. ii * deltat > strain_t0) then
+                    my_dump_t0 = real(ii * deltat,kind=realkind)
+                    exit
+                 endif
+              enddo
+              if(lpr) then
+                 write(6,*) 'start dump seismograms at shift = ',my_dump_t0
+              endif
+           endif
+           call nc_write_att_real(my_dump_t0,            'dump_t0')
         else
            call nc_write_att_int(0,                    'number of strain dumps')       
            call nc_write_att_dble(0.d0,                'strain dump sampling rate in sec' )

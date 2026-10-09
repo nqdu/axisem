@@ -46,12 +46,15 @@ contains
 !! and some short-hand parameters for the time loop.
 subroutine init_grid
 
+  use analytic_mapping, only : mapping
   use data_mesh, only : igloc_solid, nglob_solid, nglob_fluid, npol, nel_solid
   use data_mesh, only : nelem, nel_fluid, npoint_solid
   use data_comm
   use commun
   
-  integer :: iel, ipol, jpol, idest, ipt, icount, ipg, ip, imsg
+  integer :: iel, ipol, jpol, idest, ipt, icount, ipg, ip, imsg, inode
+  real(kind=dp) :: nodes_crd(8,2)
+  real(kind=dp), allocatable :: midpoints(:,:)
   
   ! Define logical arrays to determine whether element is on the axis or not.
   ! We safely use "zero" here since coordinates have been "masked" to eliminate 
@@ -197,6 +200,17 @@ subroutine init_grid
      endif
   endif ! nproc>1
 
+  ! Search receivers and boundary points using exact mapped element centers.
+  allocate(midpoints(2,nelem))
+  do iel=1,nelem
+     do inode=1,8
+        nodes_crd(inode,:) = crd_nodes(lnods(iel,inode),:)
+     enddo
+     midpoints(1,iel) = mapping(zero,zero,nodes_crd,1,iel)
+     midpoints(2,iel) = mapping(zero,zero,nodes_crd,2,iel)
+  enddo
+  call build_element_trees(midpoints)
+  deallocate(midpoints)
 
 end subroutine init_grid
 !-----------------------------------------------------------------------------------------
@@ -213,6 +227,7 @@ subroutine deallocate_preloop_arrays
   use data_pointwise
 
   if (lpr) write(6,*)'  deallocating large mesh arrays...'
+  call destroy_element_trees
   ! TESTING: comment next 4 lines to use with plane wave initial condition
   !deallocate(lnods)
   !deallocate(crd_nodes)

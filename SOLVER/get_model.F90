@@ -263,7 +263,7 @@ subroutine read_model(rho, lambda, mu, xi_ani, phi_ani, eta_ani, &
       endif
   end if
 
-  if (use_netcdf) then
+  if (use_netcdf .and. dump_wavefields .and. .not. save_bdry_faces) then
       if (anel_true) then
           do iel = 1, nelem     ! iel
              do ipol=0,npol     ! ipol

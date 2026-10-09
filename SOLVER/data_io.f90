@@ -35,6 +35,7 @@ module data_io
   logical           :: dump_vtk 
   logical           :: dump_xdmf
   logical           :: dump_wavefields 
+  logical           :: save_bdry_faces
   logical           :: checkpointing
   logical           :: diagfiles !< Write diagnostic files (seismograms at antipodes, 
                                  !! list of surface elements, blabla), default: false
@@ -52,6 +53,8 @@ module data_io
   integer           :: ncid_out
   logical           :: do_anel
   integer           :: verbose
+  !nqdu
+  real(kind=dp)     :: strain_t0 ! dump starttime
 
   integer           :: deflate_level  !< Level of deflate compression in NetCDF. Only used
                                       !! for the XDMF visualization so far.

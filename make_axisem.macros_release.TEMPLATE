@@ -16,7 +16,8 @@ USE_NETCDF = true
 USE_PAR_NETCDF = false
 # Path to NetCDF libraries. If you used a system function to install it, leave
 # it empty. The Makefile will use /usr/include and /usr/lib in this case.
-NETCDF_PATH =       
+#NETCDF_PATH = /scinet/niagara/software/2019b/opt/intel-2019u4-hdf5-1.8.21/netcdf/4.6.3/
+NETCDF_PATH = /opt/homebrew/opt/netcdf-fortran/
 
 # compile without MPI (possible values: 'false', 'true')
 # make sure to build mesh with one processor, USE_PAR_NETCDF needs to be false
@@ -36,9 +37,13 @@ INCLUDE_MPI = false
 # Meshes, i.e. <5s period. Uses up to 8 threads. Does not affect the SOLVER.
 CC      = gcc
 FC      = mpif90
-FFLAGS  = -O3 -march=native -fopenmp        
+#FFLAGS  = -O3 -march=native -fexternal-blas
+#CFLAGS  = -O3 -march=native
+#LDFLAGS = -O3 -march=native -lmkl_gf_lp64 -lmkl_core -lmkl_sequential
+
+FFLAGS  = -O3 -march=native
 CFLAGS  = -O3 -march=native                
-LDFLAGS = -O3 -march=native -fopenmp      
+LDFLAGS = -O3 -march=native
 
 # GFORTRAN (debug)
 #CC      = gcc

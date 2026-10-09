@@ -63,7 +63,7 @@ module nc_routines
     !> Will any processor dump at this value of isnap?
     logical,allocatable :: dumpposition(:)
     !> Number of GLL points to plot for this processor
-    integer             :: npoints
+    integer             :: npoints = 0
     !> Number of GLL points to plot for all processors
     integer             :: npoints_global
     !> Mapping of this processors GLL points to the global mesh
@@ -470,6 +470,8 @@ end subroutine nc_dump_strain_to_disk
 subroutine nc_dump_stf(stf)
     use data_io,  only                       : nseismo, nstrain, dump_wavefields
     use data_time, only                      : seis_it, strain_it, niter, deltat
+    !nqdu
+    use data_io, only                        : strain_t0
     real(kind=sp), intent(in), dimension(:) :: stf   
 
 #ifdef enable_netcdf
@@ -499,8 +501,8 @@ subroutine nc_dump_stf(stf)
     stf_d_dumpvar(1) = (stf(2) - stf(1)) / deltat
     stf_d_dumpvar(niter) = (stf(niter) - stf(niter-1)) / deltat
 
-    it_s = 1
-    it_d = 1
+    it_s = 0
+    it_d = 0
 
     do i = 1, niter
         ! Dumping the STF in the fine time stepping of the seismogram output
@@ -512,7 +514,8 @@ subroutine nc_dump_stf(stf)
 
         if (dump_wavefields) then
             ! Dumping the STF in the coarse time stepping of the strain (KERNER) output
-            if ( mod(i,strain_it) == 0) then
+            !nqdu if ( mod(i,strain_it) == 0) then
+            if ( mod(i,strain_it) == 0 .and. i * deltat > strain_t0) then
                it_d = it_d + 1
                stf_dump_dumpvar(it_d) = stf(i) 
                stf_d_dump_dumpvar(it_d) = stf_d_dumpvar(i)
@@ -721,6 +724,11 @@ subroutine nc_dump_elastic_parameters(rho, lambda, mu, xi_ani, phi_ani, eta_ani,
     use data_mesh,    only: mapping_ijel_ikwf, ielsolid, ielfluid, nel_solid, nel_fluid, &
                             npol, kwf_mask
 
+    !nqdu
+    use data_mesh, only: nelem_kwf,nelem
+    use data_io, only : kwf_rmax,kwf_rmin,kwf_thetamax,kwf_thetamin
+    use utlity,only : rcoord,thetacoord
+
     real(kind=dp), dimension(0:,0:,:), intent(in)       :: rho, lambda, mu, xi_ani
     real(kind=dp), dimension(0:,0:,:), intent(in)       :: phi_ani, eta_ani
     real(kind=dp), dimension(0:,0:,:), intent(in)       :: fa_ani_theta, fa_ani_phi
@@ -728,6 +736,14 @@ subroutine nc_dump_elastic_parameters(rho, lambda, mu, xi_ani, phi_ani, eta_ani,
 
     integer :: size1d
     integer :: iel, ipol, jpol, ct
+    !nqdu
+    integer :: ic
+    logical,allocatable :: mask_tp_elem(:)
+
+    !nqdu we always dump elastic parameters like fullfields
+    character(len=12) :: dump_type_tmp
+    dump_type_tmp = dump_type
+    dump_type = 'fullfields'
 
     if (dump_type == 'displ_only' .or. dump_type == 'strain_only') then
        allocate(rho1d(npoints))
@@ -791,34 +807,140 @@ subroutine nc_dump_elastic_parameters(rho, lambda, mu, xi_ani, phi_ani, eta_ani,
        vs1d = sqrt(mu1d  / rho1d)
 
     else
-       size1d = size(rho(ibeg:iend, jbeg:jend, :))
-       print *, ' NetCDF: Mesh elastic parameter variables have size:', size1d
-       allocate(rho1d(size1d))
-       allocate(lambda1d(size1d))
-       allocate(mu1d(size1d))
-       allocate(vp1d(size1d))
-       allocate(vs1d(size1d))
-       allocate(xi1d(size1d))
-       allocate(phi1d(size1d))
-       allocate(eta1d(size1d))
-       
-       rho1d = real(pack(rho(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-       lambda1d = real(pack(lambda(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-       mu1d = real(pack(mu(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-       vp1d = sqrt((lambda1d + 2 * mu1d ) / rho1d)
-       vs1d = sqrt(mu1d / rho1d)
+      !nqdu only cache neccessary elements
+      !size1d = size(rho(ibeg:iend, jbeg:jend, :))
+        size1d = (iend-ibeg+1)* (jend-jbeg + 1) * nelem_kwf
+        print *, ' NetCDF: Mesh elastic parameter variables have size:', size1d,nelem_kwf
+        allocate(rho1d(size1d))
+        allocate(lambda1d(size1d))
+        allocate(mu1d(size1d))
+        allocate(vp1d(size1d))
+        allocate(vs1d(size1d))
+        allocate(xi1d(size1d))
+        allocate(phi1d(size1d))
+        allocate(eta1d(size1d))
 
-       xi1d = real(pack(xi_ani(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-       phi1d = real(pack(phi_ani(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-       eta1d = real(pack(eta_ani(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-
-       if (present(Q_mu).and.present(Q_kappa)) then
+        if (present(Q_mu).and.present(Q_kappa)) then
            allocate(Q_mu1d(size1d))
            allocate(Q_kappa1d(size1d))
-           Q_mu1d = real(pack(Q_mu(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-           Q_kappa1d = real(pack(Q_kappa(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
-       endif
+        endif
+
+        !nqdu select all required index
+        allocate(mask_tp_elem(nelem))
+        mask_tp_elem = .false.
+        do iel=1, nel_solid
+           if (min(min(rcoord(0,0,ielsolid(iel)), rcoord(0,npol,ielsolid(iel))), &
+                   min(rcoord(npol,0,ielsolid(iel)), rcoord(npol,npol,ielsolid(iel)))) < kwf_rmax &
+               .and. &
+               max(max(rcoord(0,0,ielsolid(iel)), rcoord(0,npol,ielsolid(iel))), &
+                   max(rcoord(npol,0,ielsolid(iel)), rcoord(npol,npol,ielsolid(iel)))) > kwf_rmin &
+               .and. &
+               min(min(thetacoord(0,0,ielsolid(iel)), thetacoord(0,npol,ielsolid(iel))), &
+                   min(thetacoord(npol,0,ielsolid(iel)), thetacoord(npol,npol,ielsolid(iel)))) < kwf_thetamax &
+               .and. &
+               max(max(thetacoord(0,0,ielsolid(iel)), thetacoord(0,npol,ielsolid(iel))), &
+                   max(thetacoord(npol,0,ielsolid(iel)), thetacoord(npol,npol,ielsolid(iel)))) > kwf_thetamin) &
+               then
+               ct = ct + 1
+               mask_tp_elem(iel) = .true.
+           endif
+       enddo
+
+       do iel=1, nel_fluid
+           if (min(min(rcoord(0,0,ielfluid(iel)), rcoord(0,npol,ielfluid(iel))), &
+                   min(rcoord(npol,0,ielfluid(iel)), rcoord(npol,npol,ielfluid(iel)))) < kwf_rmax &
+               .and. &
+               max(max(rcoord(0,0,ielfluid(iel)), rcoord(0,npol,ielfluid(iel))), &
+                   max(rcoord(npol,0,ielfluid(iel)), rcoord(npol,npol,ielfluid(iel)))) > kwf_rmin &
+               .and. &
+               min(min(thetacoord(0,0,ielfluid(iel)), thetacoord(0,npol,ielfluid(iel))), &
+                   min(thetacoord(npol,0,ielfluid(iel)), thetacoord(npol,npol,ielfluid(iel)))) < kwf_thetamax &
+               .and. &
+               max(max(thetacoord(0,0,ielfluid(iel)), thetacoord(0,npol,ielfluid(iel))), &
+                   max(thetacoord(npol,0,ielfluid(iel)), thetacoord(npol,npol,ielfluid(iel)))) > kwf_thetamin) &
+               then
+               ct = ct + 1
+               mask_tp_elem(iel + nel_solid) = .true.
+           endif
+       enddo
+
+        ct = 0
+        do iel = 1,nel_solid
+           if(.not. mask_tp_elem(iel)) cycle
+           do jpol=jbeg,jend; do ipol=ibeg, iend;
+              ct = ct + 1
+              rho1d(ct) = rho(ipol, jpol, ielsolid(iel))
+              lambda1d(ct) = lambda(ipol, jpol,  ielsolid(iel))
+              mu1d(ct) = mu(ipol, jpol, ielsolid(iel))
+              vp1d(ct) = sqrt((lambda1d(ct) + 2 * mu1d(ct) ) / rho1d(ct))
+              vs1d(ct) = sqrt(mu1d(ct) / rho1d(ct))
+
+              xi1d(ct) = xi_ani(ipol, jpol,ielsolid(iel))
+              phi1d(ct) = phi_ani(ipol, jpol,ielsolid(iel))
+              eta1d(ct) = eta_ani(ipol, jpol,ielsolid(iel))
+              if (present(Q_mu).and.present(Q_kappa)) then
+                 Q_mu1d(ct) = Q_mu(ipol, jpol,ielsolid(iel))
+                 Q_kappa1d(ct) = Q_kappa(ipol, jpol,ielsolid(iel))
+              endif
+              ! compute 1d array
+           enddo; enddo
+        enddo
+
+        do iel = 1,nel_fluid
+           if(.not. mask_tp_elem(iel + nel_solid)) cycle
+           do jpol=jbeg,jend; do ipol=ibeg, iend;
+              ct = ct + 1
+              rho1d(ct) = rho(ipol, jpol, ielfluid(iel))
+              lambda1d(ct) = lambda(ipol, jpol, ielfluid(iel))
+              mu1d(ct) = mu(ipol, jpol, ielfluid(iel))
+              vp1d(ct) = sqrt((lambda1d(ct) + 2 * mu1d(ct) ) / rho1d(ct))
+              vs1d(ct) = sqrt(mu1d(ct) / rho1d(ct))
+
+              xi1d(ct) = xi_ani(ipol, jpol, ielfluid(iel))
+              phi1d(ct) = phi_ani(ipol, jpol, ielfluid(iel))
+              eta1d(ct) = eta_ani(ipol, jpol, ielfluid(iel))
+              if (present(Q_mu).and.present(Q_kappa)) then
+                 Q_mu1d(ct) = Q_mu(ipol, jpol, ielfluid(iel))
+                 Q_kappa1d(ct) = Q_kappa(ipol, jpol, ielfluid(iel))
+              endif
+              ! compute 1d array
+           enddo; enddo
+        enddo
+
+        if(allocated(mask_tp_elem)) deallocate(mask_tp_elem)
+
+    !    size1d = size(rho(ibeg:iend, jbeg:jend, :))
+    !    print *, ' NetCDF: Mesh elastic parameter variables have size:', size1d
+    !    allocate(rho1d(size1d))
+    !    allocate(lambda1d(size1d))
+    !    allocate(mu1d(size1d))
+    !    allocate(vp1d(size1d))
+    !    allocate(vs1d(size1d))
+    !    allocate(xi1d(size1d))
+    !    allocate(phi1d(size1d))
+    !    allocate(eta1d(size1d))
+
+    !    rho1d = real(pack(rho(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !    lambda1d = real(pack(lambda(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !    mu1d = real(pack(mu(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !    vp1d = sqrt((lambda1d + 2 * mu1d ) / rho1d)
+    !    vs1d = sqrt(mu1d / rho1d)
+
+    !    xi1d = real(pack(xi_ani(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !    phi1d = real(pack(phi_ani(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !    eta1d = real(pack(eta_ani(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+
+    !    if (present(Q_mu).and.present(Q_kappa)) then
+    !        allocate(Q_mu1d(size1d))
+    !        allocate(Q_kappa1d(size1d))
+    !        Q_mu1d = real(pack(Q_mu(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !        Q_kappa1d = real(pack(Q_kappa(ibeg:iend, jbeg:jend, :), .true.), kind=sp)
+    !    endif
     endif
+
+    !nqdu
+    ! copy back
+    dump_type = dump_type_tmp
 
 end subroutine nc_dump_elastic_parameters
 !-----------------------------------------------------------------------------------------
@@ -830,7 +952,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
 
     use data_io,     only: nseismo, nstrain, nseismo, ibeg, iend, jbeg, jend, &
                            dump_wavefields, dump_type
-    use data_io,     only: datapath, lfdata, strain_samp
+    use data_io,     only: datapath, lfdata, strain_samp, save_bdry_faces
     use data_mesh,   only: maxind, num_rec, discont, nelem, nel_solid, nel_fluid, &
                            ndisc, maxind_glob, nelem_kwf_global, npoint_kwf, npoint_solid_kwf, &
                            npoint_fluid_kwf, npol, nelem_kwf, npoint_kwf_global, anel_true
@@ -940,7 +1062,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
 #endif
 
 
-    if (dump_wavefields) then
+    if (dump_wavefields .and. .not. save_bdry_faces) then
         select case (trim(dump_type))
            case ('displ_only')
               if (src_type(1) == 'monopole') then
@@ -1057,7 +1179,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
         call comm_elem_number(npts_sol, npts_sol_global, npts_sol_myfirst, npts_sol_mylast)
         call comm_elem_number(npts_flu, npts_flu_global, npts_flu_myfirst, npts_flu_mylast)
   
-        if (lpr) then
+        if (lpr .and. .not. save_bdry_faces) then
           do ivar=1, nvar/2 ! The big snapshot variables for the kerner.
               call dump_mesh_data_xdmf(trim(nc_fnam), trim(nc_varnamelist(ivar))//'.xdmf', &
                                        'Snapshots/'//trim(nc_varnamelist(ivar)),  &
@@ -1079,7 +1201,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
         call check( nf90_def_grp(ncid_out, "Seismograms", ncid_recout) )
         call check( nf90_def_grp(ncid_out, "Snapshots", ncid_snapout) )
         call check( nf90_def_grp(ncid_out, "Surface", ncid_surfout) )
-        call check( nf90_def_grp(ncid_out, "Mesh", ncid_meshout) )
+        if (.not. save_bdry_faces) call check( nf90_def_grp(ncid_out, "Mesh", ncid_meshout) )
         
         if (verbose > 1) write(6,*) 'Define dimensions in ''Seismograms'' group of NetCDF output file'
 
@@ -1131,7 +1253,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
         call check( nf90_def_var(ncid=ncid_recout, name="stf_d_iter", xtype=NF90_FLOAT,&
                                  dimids=[nc_iter_dimid], varid=nc_stf_d_iter_varid) )
         
-        wavefields_group: if (dump_wavefields) then
+        wavefields_group: if (dump_wavefields .and. .not. save_bdry_faces) then
             ! Wavefields group of output file N.B: Snapshots for kernel calculation
             if (verbose > 1) write(6,*) 'Define variables in ''Snapshots'' group of NetCDF output file', &
                                         '  awaiting', nstrain, ' snapshots'
@@ -1191,45 +1313,70 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
                                       xtype  = NF90_DOUBLE, &
                                       dimids = nc_pt_dimid,&
                                       varid  = nc_mesh_z_varid) )
+            !nqdu output by using the dimension
             call check( nf90_def_var( ncid   = ncid_meshout,  &
                                       name   = 'mesh_vp', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_vp_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout, &
                                       name   = 'mesh_vs', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_vs_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout,  &
                                       name   ='mesh_rho', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_rho_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout, &
                                       name   = 'mesh_lambda', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_lambda_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout, &
                                       name   = 'mesh_mu', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_mu_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout, &
                                       name   = 'mesh_xi', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_xi_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout, &
                                       name   = 'mesh_phi', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_phi_varid) )
             call check( nf90_def_var( ncid   = ncid_meshout, &
                                       name   = 'mesh_eta', &
                                       xtype  = NF90_FLOAT, &
-                                      dimids = nc_pt_dimid,&
+                                      !dimids = nc_pt_dimid,&
+                                      dimids = [nc_mesh_npol_dimid, &
+                                      nc_mesh_npol_dimid, &
+                                      nc_mesh_elem_dimid],&
                                       varid  = nc_mesh_eta_varid) )
 
             if (anel_true) then
@@ -1237,12 +1384,18 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
                 call check( nf90_def_var( ncid   = ncid_meshout, &
                                           name   = 'mesh_Qmu', &
                                           xtype  = NF90_FLOAT, &
-                                          dimids = nc_pt_dimid,&
+                                          !dimids = nc_pt_dimid,&
+                                          dimids = [nc_mesh_npol_dimid, &
+                                          nc_mesh_npol_dimid, &
+                                          nc_mesh_elem_dimid],&
                                           varid  = nc_mesh_Qmu_varid) )
                 call check( nf90_def_var( ncid   = ncid_meshout, &
                                           name   = 'mesh_Qka', &
                                           xtype  = NF90_FLOAT, &
-                                          dimids = nc_pt_dimid,&
+                                          !dimids = nc_pt_dimid,&
+                                          dimids = [nc_mesh_npol_dimid, &
+                                          nc_mesh_npol_dimid, &
+                                          nc_mesh_elem_dimid],&
                                           varid  = nc_mesh_Qka_varid) )
             end if
 
@@ -1399,7 +1552,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
                                  varid  = nc_stf_d_seis_varid, &
                                  values = stf_d_seis_dumpvar) )
 
-        if (dump_wavefields) then
+        if (dump_wavefields .and. .not. save_bdry_faces) then
             ! Write out strain dump times
             if (verbose > 1) then
                 write(6,*) 'Writing strain dump times into NetCDF file...'
@@ -1439,7 +1592,7 @@ subroutine nc_define_outputfile(nrec, rec_names, rec_th, rec_th_req, rec_ph, rec
       recdumpvar = 0.0
     end if
 
-    if (dump_wavefields) then
+    if (dump_wavefields .and. .not. save_bdry_faces) then
         stepstodump = 0
        
         if (src_type(1) == 'monopole') then
@@ -1492,7 +1645,7 @@ end subroutine nc_define_outputfile
 !> Open the NetCDF output file, check for variable IDs and dump meshes.
 subroutine nc_finish_prepare
 #ifdef enable_netcdf
-    use data_io,   only  : datapath, lfdata, dump_wavefields, dump_type
+    use data_io,   only  : datapath, lfdata, dump_wavefields, dump_type, save_bdry_faces
     use data_mesh, only  : maxind, ind_first, ind_last, &
                            midpoint_mesh_kwf, sem_mesh_kwf, fem_mesh_kwf, nelem_kwf, &
                            nelem_kwf_global, npol, eltype_kwf, axis_kwf, num_rec
@@ -1528,7 +1681,8 @@ subroutine nc_finish_prepare
         if (verbose > 1) then
            write(6,*) '  Root process closed netCDF file, waiting for all procs to'
            write(6,*) '  arrive here and then open it to retrieve IDs'
-           if (dump_wavefields) write(6,*) '  and dump mesh coordinates.'
+           if (dump_wavefields .and. .not. save_bdry_faces) &
+                write(6,*) '  and dump mesh coordinates.'
         endif
     end if
     call barrier
@@ -1550,11 +1704,11 @@ subroutine nc_finish_prepare
 
             call getgrpid(ncid_out, "Seismograms", ncid_recout) 
             call getgrpid(ncid_out, "Surface", ncid_surfout) 
-            call getgrpid(ncid_out, "Mesh", ncid_meshout) 
+            if (.not. save_bdry_faces) call getgrpid(ncid_out, "Mesh", ncid_meshout)
             !print '(A,I5,A)', '   ', iproc, ': inquired dimension IDs'
             if (have_receiver) call getvarid( ncid_recout, "displacement", nc_disp_varid ) 
             
-            if (dump_wavefields) then
+            if (dump_wavefields .and. .not. save_bdry_faces) then
                 
                 ! first get all IDs
                 call getgrpid(ncid_out, "Snapshots", ncid_snapout) 
@@ -1663,79 +1817,128 @@ subroutine nc_finish_prepare
                                       values = zcoord1d,         &
                                       start  = npoints_myfirst,  &
                                       count  = npoints )
-
+                !!!!!!!!!!!!!nqdu!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 ! Vp
-                call putvar_real1d( ncid   = ncid_meshout,     &
-                                    varid  = nc_mesh_vp_varid, &
-                                    values = vp1d,             &
-                                    start  = npoints_myfirst,  &
-                                    count  = npoints )
+                ! call putvar_real1d( ncid   = ncid_meshout,     &
+                !                     varid  = nc_mesh_vp_varid, &
+                !                     values = vp1d,             &
+                !                     start  = npoints_myfirst,  &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_vp_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = vp1d))
 
                 ! Vs
-                call putvar_real1d( ncid   = ncid_meshout,     &
-                                    varid  = nc_mesh_vs_varid, &
-                                    values = vs1d,             &
-                                    start  = npoints_myfirst,  &
-                                    count  = npoints )
+                ! call putvar_real1d( ncid   = ncid_meshout,     &
+                !                     varid  = nc_mesh_vs_varid, &
+                !                     values = vs1d,             &
+                !                     start  = npoints_myfirst,  &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_vs_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = vs1d))
 
                 ! Rho                     
-                call putvar_real1d( ncid   = ncid_meshout,     & 
-                                    varid  = nc_mesh_rho_varid,&
-                                    values = rho1d,            &
-                                    start  = npoints_myfirst,  &
-                                    count  = npoints )
+                ! call putvar_real1d( ncid   = ncid_meshout,     &
+                !                     varid  = nc_mesh_rho_varid,&
+                !                     values = rho1d,            &
+                !                     start  = npoints_myfirst,  &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_rho_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = rho1d))
 
                 ! Lambda
-                call putvar_real1d( ncid   = ncid_meshout,     & 
-                                    varid  = nc_mesh_lambda_varid, &
-                                    values = lambda1d,         &
-                                    start  = npoints_myfirst,  &
-                                    count  = npoints )
-
+                ! call putvar_real1d( ncid   = ncid_meshout,     &
+                !                     varid  = nc_mesh_lambda_varid, &
+                !                     values = lambda1d,         &
+                !                     start  = npoints_myfirst,  &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_lambda_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = lambda1d))
                 ! Mu
-                call putvar_real1d( ncid   = ncid_meshout,     &
-                                    varid  = nc_mesh_mu_varid, &
-                                    values = mu1d,             &
-                                    start  = npoints_myfirst,  &
-                                    count  = npoints )
+                ! call putvar_real1d( ncid   = ncid_meshout,     &
+                !                     varid  = nc_mesh_mu_varid, &
+                !                     values = mu1d,             &
+                !                     start  = npoints_myfirst,  &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_mu_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = mu1d))
 
                 ! Anisotropic parameters            
                 ! Phi
-                call putvar_real1d( ncid   = ncid_meshout,      &
-                                    varid  = nc_mesh_phi_varid,  &
-                                    values = phi1d,             &
-                                    start  = npoints_myfirst,   &
-                                    count  = npoints )
+                ! call putvar_real1d( ncid   = ncid_meshout,      &
+                !                     varid  = nc_mesh_phi_varid,  &
+                !                     values = phi1d,             &
+                !                     start  = npoints_myfirst,   &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_phi_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = phi1d))
 
                 ! Xi
-                call putvar_real1d( ncid   = ncid_meshout,     &
-                                    varid  = nc_mesh_xi_varid, &
-                                    values = xi1d,             &
-                                    start  = npoints_myfirst,  &
-                                    count  = npoints )
+                ! call putvar_real1d( ncid   = ncid_meshout,     &
+                !                     varid  = nc_mesh_xi_varid, &
+                !                     values = xi1d,             &
+                !                     start  = npoints_myfirst,  &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_xi_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = xi1d))
 
                 ! Eta
-                call putvar_real1d( ncid   = ncid_meshout,      &
-                                    varid  = nc_mesh_eta_varid, &
-                                    values = eta1d,             &
-                                    start  = npoints_myfirst,   &
-                                    count  = npoints ) 
+                ! call putvar_real1d( ncid   = ncid_meshout,      &
+                !                     varid  = nc_mesh_eta_varid, &
+                !                     values = eta1d,             &
+                !                     start  = npoints_myfirst,   &
+                !                     count  = npoints )
+                call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_eta_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = eta1d))
 
                 ! Anelastic parameters
                 if (allocated(Q_mu1d).and.allocated(Q_kappa1d)) then
                         
                     ! Q_mu
-                    call putvar_real1d( ncid   = ncid_meshout,      &
-                                        varid  = nc_mesh_Qmu_varid, &
-                                        values = Q_mu1d,            &
-                                        start  = npoints_myfirst,   &
-                                        count  = npoints )
+                    ! call putvar_real1d( ncid   = ncid_meshout,      &
+                    !                     varid  = nc_mesh_Qmu_varid, &
+                    !                     values = Q_mu1d,            &
+                    !                     start  = npoints_myfirst,   &
+                    !                     count  = npoints )
+                    call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                            varid  =    nc_mesh_Qmu_varid, &
+                            start  = [1, 1, nelem_myfirst],  &
+                            count  = [npol+1, npol+1, nelem_kwf], &
+                            values = Q_mu1d))
                     ! Q_kappa
-                    call putvar_real1d( ncid   = ncid_meshout,      &
-                                        varid  = nc_mesh_Qka_varid, &
-                                        values = Q_kappa1d,         &
-                                        start  = npoints_myfirst,   &
-                                        count  = npoints )
+                    ! call putvar_real1d( ncid   = ncid_meshout,      &
+                    !                     varid  = nc_mesh_Qka_varid, &
+                    !                     values = Q_kappa1d,         &
+                    !                     start  = npoints_myfirst,   &
+                    !                     count  = npoints )
+                    call check(nf90_put_var ( ncid   = ncid_meshout,     &
+                                varid  =    nc_mesh_Qka_varid, &
+                                start  = [1, 1, nelem_myfirst],  &
+                                count  = [npol+1, npol+1, nelem_kwf], &
+                                values = Q_kappa1d))
                 end if
 
                 if (trim(dump_type) == 'displ_only') then

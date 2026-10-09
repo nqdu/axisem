@@ -9,12 +9,12 @@
 # force:  Horizontal and vertical single force as two parallel simulations. Used
 #         to compute backward kernel wavefields as needed for Instaseis
 
-SIMULATION_TYPE   single
+SIMULATION_TYPE   moment
 
 ######################## SIMULATION PARAMETERS ################################
 # Choose desired seismogram length 
 
-SEISMOGRAM_LENGTH  1800.
+SEISMOGRAM_LENGTH        1466.93
 
 # Receiver file type, allowed options:
 # colatlon: Colatitude and Longitude for each station.
@@ -28,7 +28,7 @@ RECFILE_TYPE      stations
 # Choose Mesh (local subdirname in SOLVER/MESHES directory)
 # N.B. The mesh controls the velocity model and the number of CPUs
 
-MESHNAME           PREM_50s
+MESHNAME           ak135.50
 
 # Use lateral heterogeneities (aka 2.5D model).
 # The model has to be described in inparam_hetero (default: false)
@@ -37,7 +37,7 @@ LAT_HETEROGENEITY  false
 
 
 # Include viscoelastic attenuation (details in inparam_advanced)
-ATTENUATION         true 
+ATTENUATION         false
 
 ######################## WAVEFIELD SNAPSHOTS ##################################
 # Save wavefield snapshots for visualization (default: false)

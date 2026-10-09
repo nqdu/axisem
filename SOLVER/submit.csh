@@ -228,12 +228,6 @@ foreach isim  (${srcapp})
         mkdir $infopath
     endif
     
-    mkdir Code
-    cp -Lp $homedir/*.c   Code
-    cp -Lp $homedir/*.f90 Code
-    cp -Lp $homedir/*.F90 Code
-    cp -Lp $homedir/Makefile Code
-    
     echo "copying crucial files for the simulation..."
     
     if ( $multisrc == 'true' ) then
@@ -250,6 +244,19 @@ foreach isim  (${srcapp})
     endif
     cp $homedir/inparam_basic .
     cp $homedir/inparam_advanced .
+    set save_bdry = `grep "^SAVE_BDRY_FACES" $homedir/inparam_advanced | awk '{print $2}'`
+    if ( "$save_bdry" == "true" ) then
+        if ( -f $homedir/boundary_faces.dat ) then
+            cp $homedir/boundary_faces.dat .
+        else if ( -f $homedir/boundary_surfaces.dat ) then
+            cp $homedir/boundary_surfaces.dat .
+        else if ( -f $homedir/boundar_surfaces.dat ) then
+            cp $homedir/boundar_surfaces.dat .
+        else
+            echo "ERROR: boundary_faces.dat or boundary_surfaces.dat is required by SAVE_BDRY_FACES"
+            exit 1
+        endif
+    endif
     cp $homedir/inparam_hetero .
 
     if ( $multisrc == 'false' ) then
@@ -321,22 +328,25 @@ foreach isim (${srcapp})
         
         else if ( $queue == 'slurm' ) then 
 
-            set ntaskspernode = 32
+            set ntaskspernode = 16
             echo "ntaskspernode = $ntaskspernode"
             
             echo '#\!/bin/bash -l'                          >  sbatch.sh
-            echo "#SBATCH --ntasks=$nodnum"                 >> sbatch.sh
-            echo "#SBATCH --ntasks-per-node=$ntaskspernode" >> sbatch.sh
-            echo "#SBATCH --time=00:59:00"                  >> sbatch.sh
+            echo "#SBATCH --nodes=1"                 >> sbatch.sh
+            echo "#SBATCH --ntasks=16"                >> sbatch.sh
+            #echo "#SBATCH --ntasks-per-node=$ntaskspernode" >> sbatch.sh
+            echo "#SBATCH --time=00:50:00"                  >> sbatch.sh
+            echo "#SBATCH --partition=compute"              >> sbatch.sh
+            echo "#SBATCH --job-name axisem"                  >> sbatch.sh
                             
-            echo "module load slurm"                        >> sbatch.sh
+            echo "module load gcc mkl  openmpi hdf5 netcdf"                        >> sbatch.sh
             
             echo 'echo "The current job ID is $SLURM_JOB_ID"'           >> sbatch.sh
             echo 'echo "Running on $SLURM_JOB_NUM_NODES nodes"'         >> sbatch.sh
             echo 'echo "Using $SLURM_NTASKS_PER_NODE tasks per node"'   >> sbatch.sh
             echo 'echo "A total of $SLURM_NTASKS tasks is used"'        >> sbatch.sh
             
-            echo  'aprun -n $SLURM_NTASKS ./axisem >& '$outputname      >> sbatch.sh
+            echo  'mpirun -n $SLURM_NTASKS ./axisem >& '$outputname      >> sbatch.sh
                                 
             sbatch sbatch.sh 
 
@@ -478,7 +488,7 @@ foreach isim (${srcapp})
         #ulimit -s unlimited
         #setenv OMP_NUM_THREADS 4
 
-        if ( $serial == 'true' ) then
+        if ( $serial == 'true' || $nodnum == 1 ) then
             ./axisem >& $outputname &
         else if ( $serial == 'false' ) then
             $mpiruncmd -n $nodnum ./axisem >& $outputname &
@@ -518,5 +528,3 @@ echo $mainrundir
 echo ".... the post-processing input file param_post_processing is generated in the solver"
 echo ".... based on guesses. Edit please."
 echo " ~ ~ ~ ~ ~ ~ ~ h a n g   o n   &   l o o s e ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~"
-
-

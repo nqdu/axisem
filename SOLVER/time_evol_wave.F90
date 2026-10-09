@@ -33,6 +33,7 @@ module time_evol_wave
   use seismograms
   use rotations 
   use data_io,          only: verbose
+  use boundary_faces,   only: prepare_boundary_faces, sample_boundary_faces
   
   implicit none
   public :: prepare_waves, time_loop
@@ -75,12 +76,14 @@ subroutine prepare_waves
   if (rot_src ) call def_rot_matrix
  
   ! build mapping to avoid duplicate points at element boundaries
-  if (use_netcdf .and. (trim(dump_type) == 'displ_only' &
+  if (use_netcdf .and. .not. save_bdry_faces .and. &
+                        (trim(dump_type) == 'displ_only' &
                         .or. trim(dump_type) == 'strain_only')) &
      call build_kwf_grid()
 
   ! compute/output some more parameters
   call compute_numerical_parameters
+  if (save_bdry_faces) call prepare_boundary_faces
 
   ! Define velocity/density model (velocities in m/s, density in kg/m^3 ) AND 
   ! compute all global matrices (Jacobian, mapping, mass matrix, S/F boundary)
@@ -88,9 +91,11 @@ subroutine prepare_waves
   call read_model_compute_terms
 
   ! compute source time function
+  !print*,'compute stf ...'
   call compute_stf
 
   ! compute source location within mesh and moment tensor/single force field
+  !print*,'compute source'
   call compute_src
 
   ! Create mask for fluid free surface
@@ -109,7 +114,7 @@ subroutine prepare_waves
      open(unit=4446,file=datapath(1:lfdata)//'/energy_glob.dat')
   endif     
 
-  if (dump_wavefields) then 
+  if (dump_wavefields .and. .not. save_bdry_faces) then
      if (lpr) write(6,*)'  dumping strain mesh and associated fields...'
      call dump_wavefields_mesh_1d
   endif
@@ -184,7 +189,7 @@ subroutine prepare_waves
   ! allow for different types of receiver files
   call prepare_from_recfile_seis
   
-  if (lpr) then ! This has to be called by just one processor. Since 0 will have to
+  if (lpr .and. .not. save_bdry_faces) then ! This has to be called by just one processor. Since 0 will have to
                 ! do more stuff further below, let's assign lpr to this task
      ! dump meshes for displ_only kwf output
      if (dump_wavefields .and. dump_type == "displ_only") then 
@@ -578,6 +583,7 @@ subroutine symplectic_time_loop
         '*********** S T A R T I N G   T I M E   L O O P ************'
 
   iclockdump = tick()
+
   call dump_stuff(0, iseismo, istrain, isnap, disp,velo,chi,dchi,ddchi,t)
   iclockdump = tick(id=iddump, since=iclockdump)
 
@@ -1200,14 +1206,19 @@ subroutine dump_stuff(iter, iseismo, istrain, isnap,     &
 
   if (dump_wavefields) then
 
-    if (mod(iter,strain_it)==0) then
+    !nqdu if (mod(iter,strain_it)==0) then
+    if(mod(iter,strain_it)==0 .and. iter * deltat > strain_t0) then
 
       ! dump displacement and velocity in each surface element
       ! for netcdf people set .true. in inparam to use it instead of the standard
       ! the update of the strain has to preceed the call to the function. 
       ! It starts from 
+      !print*,istrain,iter * deltat
       istrain = istrain + 1
 
+      if (save_bdry_faces) then
+          call sample_boundary_faces(disp,chi,istrain)
+      else
       select case (trim(dump_type))
         case ('displ_only')
           ! Only dump the 3-comp displacement in solid and fluid.
@@ -1239,10 +1250,11 @@ subroutine dump_stuff(iter, iseismo, istrain, isnap,     &
             call dump_velo_global(velo, dchi, istrain) ! velocity globally
 
         end select
+      endif
        
         !> Check, whether it is time to dump the buffer variables to disk and if so,
         !! do so.
-        if (use_netcdf) call nc_dump_strain(istrain)
+        if (use_netcdf .and. .not. save_bdry_faces) call nc_dump_strain(istrain)
 
     endif ! dumping interval strain_it
 

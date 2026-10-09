@@ -17,24 +17,23 @@
 # external:           Layered external model, give file name in EXT_MODEL, the 
 #                     inner core needs to be big enough, check VTK output.
 
-BACKGROUND_MODEL    prem_iso
-
-# EXT_MODEL           layer_solid.bm
+BACKGROUND_MODEL    external
+EXT_MODEL           ak135.smooth.bm
 
 # Override the Q parameters (attenuation) of the external model with the given 
 # reference model values (allowed: prem, ak135f, default: none)
 # OVERRIDE_EXT_Q    prem
 
 # Dominant period [s]
-DOMINANT_PERIOD     50.0
+DOMINANT_PERIOD    50
 
 # Number of slices in the mesh decomposition in latitude and radius.
 # The resulting number of processors is NTHETA_SLICES * NRADIAL_SLICES
 # To ensure good scaling, use at least approximately 500 elements per core, see 'nelem' in
 # mesh_params.h
 # (will be overwritten if ONLY_SUGGEST_NPROC is set true)
-NTHETA_SLICES       2
-NRADIAL_SLICES      1 
+NTHETA_SLICES       1
+NRADIAL_SLICES      2
 
 # will not generate a mesh, but only suggested numbers for NTHETA_SLICES for optimal mesh
 # decomposition

@@ -29,7 +29,9 @@
 pthread_t thread = (pthread_t) 0;
 
 // stub - so c knows what the function looks like
-extern void __nc_routines_MOD_nc_dump_strain_to_disk();
+// extern void __nc_routines_MOD_nc_dump_strain_to_disk();
+// nqdu add  to avoid name mangling
+void nc_dump_strain_to_disk();
 
 // tread that calls the IO function from fortran
 void *cfunc_thread(void* valp)

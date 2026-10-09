@@ -48,6 +48,7 @@ contains
 subroutine read_model_compute_terms
 
   use get_model
+  use boundary_faces, only: cache_boundary_materials
   use attenuation,  only: prepare_attenuation
   use commun,       only: barrier
   use data_matr,    only: Q_mu, Q_kappa, M_w_fl, M0_w_fl, M1chi_fl, M2chi_fl, M4chi_fl, &
@@ -87,6 +88,7 @@ subroutine read_model_compute_terms
   else
     call read_model(rho, lambda, mu, xi_ani, phi_ani, eta_ani, fa_ani_theta, fa_ani_phi)
   endif
+  call cache_boundary_materials(rho,lambda,mu,xi_ani,phi_ani,eta_ani)
 
   if (lpr .and. verbose > 1) write(6,*) '   define mass matrix....'
   call def_mass_matrix_k(rho, lambda, mu, massmat_kwts2)

@@ -25,6 +25,7 @@ program axisem
   use data_proc,             only : nproc, mynum, appnproc, appmynum, lpr, procstrg
   use data_io,               only : dump_xdmf, use_netcdf, verbose
   use nc_routines,           only : nc_end_output, nc_finish_prepare
+  use boundary_faces,        only : create_boundary_output, finish_boundary_output
   use nc_snapshots,          only : nc_close_snapfile
   use data_source,           only : isim
   use data_mesh,             only : do_mesh_tests
@@ -35,7 +36,7 @@ program axisem
   use time_evol_wave,        only : prepare_waves, time_loop
   use commun,                only : pinit, pend, barrier
   use meshes_io,             only : finish_xdmf_xml
-  use data_io,               only : verbose, define_io_appendix
+  use data_io,               only : verbose, define_io_appendix, save_bdry_faces
   use clocks_wrapper_solver, only : start_clock, end_clock
   
   implicit none
@@ -84,12 +85,14 @@ program axisem
         write(6,*) 'MAIN: Finish preparation of NetCDF file...................'
      call nc_finish_prepare
   endif
+  if (save_bdry_faces) call create_boundary_output
   
   call barrier ! Just making sure we're all ready to rupture...
   
   if (lpr .and. verbose >= 1) &
      write(6,*) 'MAIN: Starting wave propagation...........................'
   call time_loop ! time_evol_wave
+  if (save_bdry_faces) call finish_boundary_output
 
   if (use_netcdf) then
      if (lpr .and. verbose >= 1) &

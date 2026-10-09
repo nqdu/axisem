@@ -229,26 +229,36 @@ end subroutine prepare_seismograms
 !-----------------------------------------------------------------------------------------
 
 !-----------------------------------------------------------------------------------------
-!> Read colatitudes [deg] from a file receivers.dat and locate closest grid 
-!! point for seismograms, output grid point locations in 
+!> Read receiver coordinates and locate containing elastic elements for
+!! interpolated seismograms, output receiver locations in
 !! receiver_pts.dat<PROCID>
 subroutine prepare_from_recfile_seis
 
   use utlity
-  use data_mesh,    only: loc2globrec, dtheta_rec, npol, surfelem, ielsolid, num_rec_tot, &
-                          north, router, recfile_el, min_distance_dim, have_epi, num_rec, maxind
+  use data_mesh,    only: loc2globrec, dtheta_rec, npol, num_rec_tot, &
+                          router, recfile_el, recfile_weights, axis_solid, crd_nodes, lnods, &
+                          min_distance_dim, have_epi, num_rec, nearest_element_count, &
+                          nearest_mesh_elements, solid_element_index, nel_solid, ielsolid
+  use data_spec,    only: xi_k, eta
   use data_source,  only: src_type, rot_src, srccolat, srclon
   use commun
   use rotations,    only: rotate_receivers_recfile, save_google_earth_kml
   use nc_routines,  only: nc_define_outputfile
   
-  integer                        :: i, iel, ipol, irec, num_rec_glob
+  integer                        :: i, iel, ipol, jpol, ielem, irec, num_rec_glob
+  integer                        :: candidates(nearest_element_count), ncandidates, icandidate, attempt
   integer                        :: count_diff_loc, count_procs
-  real(kind=dp)                  :: s, z, r, theta, recdist, myrecdist
-  real(kind=dp)                  :: tmprecfile_th, tmprecfile_el(3)
+  real(kind=dp)                  :: recdist, myrecdist, station_depth, target_radius, margin
+  real(kind=dp)                  :: xi, etaloc, sloc, zloc, target_s, target_z
+  real(kind=dp)                  :: tmprecfile_th, tmprecfile_xi, tmprecfile_eta
+  real(kind=dp)                  :: coefficients(0:npol,0:npol), location_error
+  integer                        :: tmprecfile_el(3)
+  logical                        :: in_it
   real(kind=dp), allocatable     :: recfile_readth(:), recfile_readph(:)
   real(kind=dp), allocatable     :: recfile_th_glob(:)
-  real(kind=dp), allocatable     :: recfile_th_loc(:), recfile_el_loc(:,:)
+  real(kind=dp), allocatable     :: recfile_th_loc(:), recfile_xi_loc(:), recfile_eta_loc(:)
+  real(kind=dp), allocatable     :: recfile_error_loc(:)
+  integer, allocatable           :: recfile_el_loc(:,:)
   real(kind=dp), allocatable     :: recfile_th(:), recfile_ph_loc(:), recfile_ph_loc2(:)
   integer,allocatable            :: rec2proc(:), loc2globrec_loc(:)!, loc2globrec(:)
   character(len=4)               :: appielem
@@ -281,6 +291,9 @@ subroutine prepare_from_recfile_seis
      allocate( recfile_th_glob(1:num_rec_glob) )
      allocate( recfile_th_loc (1:num_rec_glob) )
      allocate( recfile_el_loc (1:num_rec_glob,3))
+     allocate( recfile_xi_loc (1:num_rec_glob) )
+     allocate( recfile_eta_loc(1:num_rec_glob) )
+     allocate( recfile_error_loc(1:num_rec_glob) )
      allocate( loc2globrec_loc(1:num_rec_glob) )
      allocate( rec2proc       (1:num_rec_glob) )
      allocate( recfile_readph (1:num_rec_glob) )
@@ -329,7 +342,9 @@ subroutine prepare_from_recfile_seis
      do i = 1, num_rec_glob
         read(34,*) rec_name_temp, rec_network_temp, rec_lat_temp, rec_lon_temp, rec_elevation_temp, rec_bury_temp
 
-        if (any((rec_name_temp.eq.rec_name).and.(rec_network_temp.eq.rec_network))) then
+        ! Compare only stations already read; the rest of the arrays are unset.
+        if (any((rec_name_temp.eq.rec_name(1:irec_different)).and. &
+                (rec_network_temp.eq.rec_network(1:irec_different)))) then
           ! Same station name occurs twice
           if (mynum==0) write(33,*) rec_name_temp, rec_network_temp, rec_lat_temp, rec_lon_temp, &
                                     rec_elevation_temp, rec_bury_temp
@@ -361,6 +376,9 @@ subroutine prepare_from_recfile_seis
      allocate(recfile_th_glob(1:num_rec_glob))
      allocate(recfile_th_loc(1:num_rec_glob))
      allocate(recfile_el_loc(1:num_rec_glob,3))
+     allocate(recfile_xi_loc(1:num_rec_glob))
+     allocate(recfile_eta_loc(1:num_rec_glob))
+     allocate(recfile_error_loc(1:num_rec_glob))
      allocate(loc2globrec_loc(1:num_rec_glob))
      allocate(rec2proc(1:num_rec_glob))
      allocate(recfile_readph(1:num_rec_glob))
@@ -406,7 +424,8 @@ subroutine prepare_from_recfile_seis
        stop
     endif
 
-    if (maxval(recfile_readth) < 0.d0) then 
+    ! The smallest colatitude determines whether any receiver is below zero.
+    if (minval(recfile_readth) < 0.d0) then
        if (lpr) write(6,*)' ERROR: We do not allow negative receiver colatitudes....'
        stop
     endif
@@ -432,68 +451,81 @@ subroutine prepare_from_recfile_seis
     recfile_th_glob(:) = zero
     rec2proc(:) = 0
 
-    ! find closest grid points
+    ! Locate receivers anywhere in the elastic mesh. In STATIONS, burial and
+    ! elevation are metres, so their difference is depth below the model surface.
+    ! Project stations above that surface onto it to preserve surface receivers.
+    margin = max(1.0e-3_dp,1.0e-8_dp*router)
 
     do i=1, num_rec_glob
-       if (verbose > 1) write(69,*)'  working on receiver #',i,recfile_readth(i)*180./pi
-       recdist=10.d0*router
-       do iel=1,maxind
-          do ipol=0,npol
-             if (north(ielsolid(surfelem(iel)))) then ! NORTH
-                call compute_coordinates(s,z,r,theta,ielsolid(surfelem(iel)),&
-                                         ipol,npol)
-                if (z < zero ) then
-                 write(6,*)'PROBLEM! north but z<0: ', &
-                             north(ielsolid(surfelem(iel))),z
-                   write(6,*)'r,theta:',r/1000.,theta*180./pi
-                   write(6,*)iel,surfelem(iel),ielsolid(surfelem(iel))
-                   stop
-                endif
-
-             else ! SOUTH
-                call compute_coordinates(s,z,r,theta,ielsolid(surfelem(iel)),&
-                                         ipol,0)
-                if (z > zero ) then
-                   write(6,*)'PROBLEM! south but z>0: ',&
-                             north(ielsolid(surfelem(iel))),z
-                   write(6,*)'r,theta:',r/1000.,theta*180./pi
-                   write(6,*)iel,surfelem(iel),ielsolid(surfelem(iel))
-                   stop
-                endif
-
+       if (verbose > 1) write(69,*)'  working on receiver #',i,recfile_readth(i)
+       station_depth = zero
+       if (rec_file_type == 'stations') then
+          station_depth = min(router,max(zero,rec_bury(i)-rec_elevation(i)))
+       endif
+       target_radius = router - station_depth
+       target_s = target_radius*sin(recfile_readth(i)*pi/180.0_dp)
+       target_z = target_radius*cos(recfile_readth(i)*pi/180.0_dp)
+       call nearest_mesh_elements(target_s,target_z,1,candidates,ncandidates)
+       do attempt=1,2
+          recdist = huge(1.0_dp)
+          if (attempt == 2) ncandidates = nel_solid
+          do icandidate=1,ncandidates
+             if (attempt == 1) then
+                ielem = candidates(icandidate)
+                iel = solid_element_index(ielem)
+                ! Reject distant elements before inverting their curved mappings.
+                if (target_s < minval(crd_nodes(lnods(ielem,:),1))-margin .or. &
+                    target_s > maxval(crd_nodes(lnods(ielem,:),1))+margin .or. &
+                    target_z < minval(crd_nodes(lnods(ielem,:),2))-margin .or. &
+                    target_z > maxval(crd_nodes(lnods(ielem,:),2))+margin) cycle
+             else
+                iel = icandidate
+                ielem = ielsolid(iel)
              endif
+             ! Invert the element mapping to find the receiver's local xi and eta.
+             call inside_element(target_s,target_z,ielem,xi,etaloc,sloc,zloc,in_it)
+             if (.not. in_it) cycle
+             if (hypot(target_s-sloc,target_z-zloc) >= recdist) cycle
 
-             if (dabs(theta/pi*180.d0-recfile_readth(i)) < recdist) then
-                recdist=dabs(theta/pi*180.d0-recfile_readth(i))
-                tmprecfile_th=theta/pi*180.d0
-                tmprecfile_el(1)=surfelem(iel) ! only in the solid domain
-                tmprecfile_el(2)=ipol
-                if (north(ielsolid(surfelem(iel)))) tmprecfile_el(3)=npol
-                if (.not. north(ielsolid(surfelem(iel)))) tmprecfile_el(3)=0 
+             recdist = hypot(target_s-sloc,target_z-zloc)
+             tmprecfile_th = atan2(sloc,zloc)*180.0_dp/pi
+             tmprecfile_el(1) = iel
+             ! Keep interpolation on the reference element when rounding crosses an edge.
+             tmprecfile_xi = max(-1.0_dp,min(1.0_dp,xi))
+             tmprecfile_eta = max(-1.0_dp,min(1.0_dp,etaloc))
+             ! Retain the nearest GLL index for the existing receiver diagnostics.
+             if (axis_solid(iel)) then
+                tmprecfile_el(2) = minloc(abs(xi_k-tmprecfile_xi),dim=1)-1
+             else
+                tmprecfile_el(2) = minloc(abs(eta-tmprecfile_xi),dim=1)-1
              endif
-
+             tmprecfile_el(3) = minloc(abs(eta-tmprecfile_eta),dim=1)-1
           enddo
+          myrecdist = recdist
+          recdist = pmin(recdist)
+          if (recdist < huge(1.0_dp)) exit
        enddo
 
-       ! Make sure only one processor takes on each location
-       myrecdist=recdist
-       recdist=pmin(recdist)
-       count_procs=0
-       if (dblreldiff_small(myrecdist,recdist)) count_procs=mynum
-       !take as default the larger processor ID to take on the receiver
-       count_procs=pmax_int(count_procs)
+       ! Boundary receivers can belong to multiple ranks; choose the largest
+       ! rank among equally close containing elements, as the old locator did.
+       call pcheck(recdist == huge(1.0_dp), 'No elastic element contains a receiver.')
+       count_procs = -1
+       if (myrecdist <= recdist + 1.0e-6_dp) count_procs = mynum
+       count_procs = pmax_int(count_procs)
        if (mynum==count_procs) then 
           irec = irec+1
-          if (verbose > 1) write(69,*)'found local grid point and processor...',irec,i
+          if (verbose > 1) write(69,*)'found local receiver element and processor...',irec,i
           recfile_th_loc(irec)     = tmprecfile_th
           recfile_el_loc(irec,1:3) = tmprecfile_el(1:3)
+          recfile_xi_loc(irec)     = tmprecfile_xi
+          recfile_eta_loc(irec)    = tmprecfile_eta
+          recfile_error_loc(irec)  = myrecdist
           loc2globrec_loc(irec)    = i
           rec2proc(i)              = mynum
           recfile_th_glob(i)       = tmprecfile_th
+          ! Set longitude only for the receiver assigned to this rank.
+          recfile_ph_loc2(irec)    = recfile_readph(i)*pi/180.0_dp
        endif
-
-       ! longitude
-       if (irec > 0)  recfile_ph_loc2(irec) = recfile_readph(i)*pi/180.
 
        ! Can do that since NOW only one proc has non-zero values
        recfile_th_glob(i) = psum_dble(recfile_th_glob(i))
@@ -504,6 +536,7 @@ subroutine prepare_from_recfile_seis
     ! Form local arrays depending on how many receivers each processor has
     num_rec = irec
     allocate(recfile_el(1:num_rec,1:3),loc2globrec(1:num_rec))
+    allocate(recfile_weights(0:npol,0:npol,1:num_rec))
     allocate(recfile_th(1:num_rec))
     allocate(recfile_ph_loc(1:num_rec))
     allocate(fname_rec_seis(1:num_rec))
@@ -514,6 +547,26 @@ subroutine prepare_from_recfile_seis
     recfile_th(1:num_rec)=recfile_th_loc(1:num_rec)
     recfile_ph_loc(1:num_rec)=recfile_ph_loc2(1:num_rec)
     deallocate(recfile_ph_loc2)
+
+    ! Build each nodal basis function once at the receiver's local coordinates.
+    ! Axial elements use GLJ nodes in xi; other elements use GLL nodes.
+    ! Time stepping then needs only a weighted sum of elemental displacement.
+    coefficients = zero
+    do irec=1,num_rec
+       do jpol=0,npol
+          do ipol=0,npol
+             coefficients(ipol,jpol) = one
+             if (axis_solid(recfile_el(irec,1))) then
+                recfile_weights(ipol,jpol,irec) = lagrange_interpol_2D_td( &
+                     xi_k,eta,coefficients,recfile_xi_loc(irec),recfile_eta_loc(irec))
+             else
+                recfile_weights(ipol,jpol,irec) = lagrange_interpol_2D_td( &
+                     eta,eta,coefficients,recfile_xi_loc(irec),recfile_eta_loc(irec))
+             endif
+             coefficients(ipol,jpol) = zero
+          enddo
+       enddo
+    enddo
 
     ! How many receivers does each processor have, do they sum to global number?
     if ( psum_int(num_rec) /= num_rec_glob ) then
@@ -560,29 +613,16 @@ subroutine prepare_from_recfile_seis
 
        call define_io_appendix(appielem,loc2globrec(i))
 
-       if ( pi/180*router*abs(recfile_readth(loc2globrec(i))-recfile_th(i) ) >  &
-            min_distance_dim) then
+       ! Compare the mapped point with the requested meridional position.
+       location_error = recfile_error_loc(i)
+       if (location_error > min_distance_dim) then
           count_diff_loc=count_diff_loc+1
           if (verbose > 1) write(6,22)procstrg, &
                     recfile_readth(loc2globrec(i)), recfile_th(i)
-          if (dabs(recfile_readth(loc2globrec(i))-recfile_th(i))> maxreclocerr) &
-               maxreclocerr=dabs(recfile_readth(loc2globrec(i))-recfile_th(i))/ &
-                            180.*pi*router
-
        endif
+       maxreclocerr = max(maxreclocerr,location_error)
 
 22  format('   WARNING:',a8,' rec. location file/mesh:',2(f9.3))
-
-       ! Test: receivers on the surface?
-       call compute_coordinates(s,z,r,theta,ielsolid(recfile_el(i,1)), &
-            recfile_el(i,2),recfile_el(i,3))
-       if ( .not. dblreldiff_small(r,router)) then
-          write(6,*)''
-          write(6,*)'PROBLEM: receiver is not at the surface!'
-          write(6,*)'r [km], colat [deg]:',r/1000.,theta/pi*180.
-          stop
-       endif
-
 
        if(.not.(use_netcdf))   then
            if (verbose > 1) write(6,*)'  ',procstrg,'opening receiver file:',i,appielem
@@ -739,39 +779,54 @@ end subroutine compute_hyp_epi_equ_anti
 !-----------------------------------------------------------------------------------------
 
 !-----------------------------------------------------------------------------------------
+subroutine interpolate_recfile_displacement(disp,irec,values)
+
+  ! Sample all three displacement components at the receiver's local position.
+
+  use data_mesh, only: recfile_el, recfile_weights
+
+  real(kind=realkind), intent(in)  :: disp(0:,0:,:,:)
+  integer, intent(in)             :: irec
+  real(kind=realkind), intent(out) :: values(3)
+  integer                        :: icomp,ielem
+
+  ielem = recfile_el(irec,1)
+  do icomp=1,3
+     values(icomp) = real(sum(recfile_weights(:,:,irec) * &
+          real(disp(:,:,ielem,icomp),kind=dp)),kind=realkind)
+  enddo
+
+end subroutine interpolate_recfile_displacement
+!-----------------------------------------------------------------------------------------
+
+!-----------------------------------------------------------------------------------------
 subroutine compute_recfile_seis_bare(disp)
 
   use data_source, only : src_type
-  use data_mesh, only   : recfile_el, num_rec
+  use data_mesh, only   : num_rec
   
   real(kind=realkind), intent(in) :: disp(0:,0:,:,:)
   
   integer :: i
+  real(kind=realkind) :: values(3)
 
    if (src_type(1)=='monopole') then
       do i=1,num_rec
-         ! order: u_s, u_z
-         write(100000+i,*) &
-             disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),1), &
-             disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),3)
+         ! Interpolate first, then write the monopole's s and z components.
+         call interpolate_recfile_displacement(disp,i,values)
+         write(100000+i,*) values(1),values(3)
       enddo
    elseif (src_type(1)=='dipole') then
       do i=1,num_rec
          ! order: u_s, u_phi,u_z
-         write(100000+i,*) &
-              disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),1) &
-              + disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),2),  &
-              disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),1) &
-              - disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),2), &
-              disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),3)
+         call interpolate_recfile_displacement(disp,i,values)
+         write(100000+i,*) values(1)+values(2),values(1)-values(2),values(3)
       enddo
    elseif (src_type(1)=='quadpole') then
       do i=1,num_rec
          ! order: u_s, u_phi,u_z 
-         write(100000+i,*) &
-             disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),1), &
-             disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),2), &
-             disp(recfile_el(i,2),recfile_el(i,3),recfile_el(i,1),3)
+         call interpolate_recfile_displacement(disp,i,values)
+         write(100000+i,*) values
       enddo
   endif !src_type(1)
 
@@ -784,34 +839,35 @@ subroutine nc_compute_recfile_seis_bare(disp, iseismo)
 
   use data_source, only : src_type
   use nc_routines, only : nc_dump_rec
-  use data_mesh,   only : recfile_el, num_rec
+  use data_mesh,   only : num_rec
 
   real(kind=realkind), intent(in)  :: disp(0:,0:,:,:)
   integer,             intent(in)  :: iseismo
 
   real(kind=realkind)              :: disp_rec(3,num_rec)
+  real(kind=realkind)              :: values(3)
   integer                          :: i
 
 
   if (src_type(1) == 'monopole') then
      do i=1, num_rec
-          disp_rec(1,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),1)
+          ! Use the same receiver interpolation as the text seismogram path.
+          call interpolate_recfile_displacement(disp,i,values)
+          disp_rec(1,i) = values(1)
           disp_rec(2,i) = 0
-          disp_rec(3,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),3)
+          disp_rec(3,i) = values(3)
      enddo
   elseif (src_type(1) == 'dipole') then
      do i=1, num_rec
-          disp_rec(1,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),1) &
-                        + disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),2)
-          disp_rec(2,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),1) &
-                        - disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),2)
-          disp_rec(3,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),3)
+          call interpolate_recfile_displacement(disp,i,values)
+          disp_rec(1,i) = values(1)+values(2)
+          disp_rec(2,i) = values(1)-values(2)
+          disp_rec(3,i) = values(3)
      enddo
   elseif (src_type(1) == 'quadpole') then
      do i=1, num_rec
-          disp_rec(1,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),1)
-          disp_rec(2,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),2)
-          disp_rec(3,i) = disp(recfile_el(i,2), recfile_el(i,3), recfile_el(i,1),3)
+          call interpolate_recfile_displacement(disp,i,values)
+          disp_rec(:,i) = values
      enddo
   end if !src_type(1)
 

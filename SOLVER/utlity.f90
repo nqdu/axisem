@@ -30,6 +30,9 @@ module utlity
   public :: dblereldiff, reldiff
   public :: dbleabsreldiff, absreldiff
   public :: to_lower
+
+  !nqdu
+  public :: inside_element,lagrange_interpol_2D_td
   private
 
 contains
@@ -340,6 +343,116 @@ function to_lower(strIn) result(strOut)
 
 end function to_lower
 !-----------------------------------------------------------------------------------------
+
+!-----------------------------------------------------------------------------------------
+
+function lagrange_interpol_2D_td(points1, points2, coefficients, x1, x2) result(s)
+!> computes the Lagrangian interpolation polynomial of a function defined by its values at
+!  a set of collocation points in 2D, where the points are a tensorproduct of two sets of
+!  points in 1D, for time dependent coefficients
+   implicit none
+
+   real(kind=dp), intent(in)  :: points1(0:), points2(0:)
+   real(kind=dp), intent(in)  :: coefficients(0:,0:)
+   real(kind=dp), intent(in)  :: x1, x2
+   real(kind=dp)              :: s
+   real(kind=dp)              :: l_i(0:size(points1)-1), l_j(0:size(points2)-1)
+
+   integer               :: i, j, m1, m2, n1, n2
+
+   n1 = size(points1) - 1
+   n2 = size(points2) - 1
+
+   do i=0, n1
+      l_i(i) = 1
+      do m1=0, n1
+         if (m1 == i) cycle
+         l_i(i) = l_i(i) * (x1 - points1(m1)) / (points1(i) - points1(m1))
+      enddo
+   enddo
+
+   do j=0, n2
+      l_j(j) = 1
+      do m2=0, n2
+         if (m2 == j) cycle
+         l_j(j) = l_j(j) * (x2 - points2(m2)) / (points2(j) - points2(m2))
+      enddo
+   enddo
+
+   s = 0.0_dp
+
+   do i=0, n1
+      do j=0, n2
+         s = s + coefficients(i,j) * l_i(i) * l_j(j)
+      enddo
+   enddo
+
+end function lagrange_interpol_2D_td
+
+!-----------------------------------------------------------------------------------------
+subroutine inside_element(s,z,iel,xi,eta,sloc,zloc,in_it)
+! check if (s,z) is in element (iel), if true, also compute it's local coordinates (xi,eta)
+   use data_mesh,only : crd_nodes, lnods
+   use analytic_mapping, only : mapping,compute_partial_derivatives
+   implicit none
+
+   real(kind=dp),intent(in)  :: s,z
+   real(kind=dp),intent(out) :: xi,eta,sloc,zloc
+   integer, intent(in)       :: iel
+   logical,intent(out)       :: in_it
+
+   !local variables
+   integer                   :: i
+   integer,parameter         :: maxiter = 20
+   real(kind=dp),parameter   :: tol = 1.0e-3
+   real(kind=dp)             :: nodes(8,2),ds,dz,dist,jaco_det,jaco(2,2),inv_jaco(2,2)
+
+   in_it = .false.
+   ! compute control coordinates in this element
+   nodes(:,1) = crd_nodes(lnods(iel,:),1)
+   nodes(:,2) = crd_nodes(lnods(iel,:),2)
+
+   ! start value
+   xi = 0.0_dp
+   eta = 0.0_dp
+
+   do i=1,maxiter
+     sloc = mapping(xi,eta,nodes,1,iel)
+     zloc = mapping(xi,eta,nodes,2,iel)
+     ds = s - sloc
+     dz = z - zloc
+
+     ! check convergence
+     dist = hypot(ds,dz)
+     if (dist < 1.0e-7_dp * max(1.0_dp, hypot(s,z))) then
+       exit
+     endif
+
+     ! update
+     call compute_partial_derivatives(jaco(1,1),jaco(2,1),jaco(1,2),jaco(2,2),xi,eta,nodes,iel)
+     jaco_det = jaco(1,1) * jaco(2,2) - jaco(1,2) * jaco(2,1)
+     if (abs(jaco_det) <= tiny(jaco_det)) exit
+     inv_jaco(1,1) = jaco(2,2) / jaco_det
+     inv_jaco(2,1) = -jaco(2,1) / jaco_det
+     inv_jaco(1,2) = -jaco(1,2) / jaco_det
+     inv_jaco(2,2) = jaco(1,1) / jaco_det
+     xi  =  xi + inv_jaco(1,1) * ds + inv_jaco(1,2) * dz
+     eta = eta + inv_jaco(2,1) * ds + inv_jaco(2,2) * dz
+
+     if (abs(xi) > 1.0 + tol) xi = xi / abs(xi) * 1.1
+     if (abs(eta) > 1.0 + tol) eta = sign(1.1_dp, eta)
+   enddo
+   sloc = mapping(xi,eta,nodes,1,iel)
+   zloc = mapping(xi,eta,nodes,2,iel)
+
+   ! check inside this element
+   in_it = (hypot(s-sloc,z-zloc) <= 1.0e-7_dp * max(1.0_dp,hypot(s,z)) .and. &
+           xi >= -1 - tol .and. &
+           xi <= 1 + tol .and. &
+           eta >= -1 - tol .and. &
+           eta <= 1 + tol)
+
+end subroutine inside_element
 
 end module utlity
 !=========================================================================================

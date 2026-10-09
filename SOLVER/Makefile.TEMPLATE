@@ -4,7 +4,7 @@ include ../make_axisem.macros
 
 SRCS =	background_models.F90 commpi.F90 commun.F90 get_model.F90 \
 	lateral_heterogeneities.F90 meshes_io.F90 nc_helpers.F90 \
-	nc_routines.F90 nc_snapshots.F90 parameters.F90 time_evol_wave.F90 \
+	nc_routines.F90 nc_snapshots.F90 boundary_faces.F90 parameters.F90 time_evol_wave.F90 \
 	analytic_mapping.f90 analytic_semi_mapping.f90 \
 	analytic_spheroid_mapping.f90 apply_masks.f90 attenuation.f90 \
 	clocks.f90 clocks_wrapper_solver.f90 data_comm.f90 \
@@ -19,7 +19,7 @@ SRCS =	background_models.F90 commpi.F90 commun.F90 get_model.F90 \
 
 OBJS =	background_models.o commpi.o commun.o get_model.o \
 	lateral_heterogeneities.o meshes_io.o nc_helpers.o nc_routines.o \
-	nc_snapshots.o parameters.o time_evol_wave.o analytic_mapping.o \
+	nc_snapshots.o boundary_faces.o parameters.o time_evol_wave.o analytic_mapping.o \
 	analytic_semi_mapping.o analytic_spheroid_mapping.o apply_masks.o \
 	attenuation.o clocks.o clocks_wrapper_solver.o data_comm.o \
 	data_heterogeneous.o data_io.o data_matr.o data_mesh.o \
@@ -109,7 +109,7 @@ data_comm.o: global_parameters.o list.o Makefile ../make_axisem.macros
 data_heterogeneous.o: global_parameters.o Makefile ../make_axisem.macros 
 data_io.o: global_parameters.o Makefile ../make_axisem.macros 
 data_matr.o: global_parameters.o Makefile ../make_axisem.macros 
-data_mesh.o: data_io.o data_spec.o global_parameters.o Makefile ../make_axisem.macros 
+data_mesh.o: data_io.o data_spec.o global_parameters.o kdtree2.o Makefile ../make_axisem.macros
 data_pointwise.o: global_parameters.o Makefile ../make_axisem.macros 
 data_proc.o:  Makefile ../make_axisem.macros 
 data_source.o: global_parameters.o Makefile ../make_axisem.macros 
@@ -118,7 +118,7 @@ data_time.o: global_parameters.o Makefile ../make_axisem.macros
 def_grid.o: analytic_mapping.o apply_masks.o commun.o data_comm.o data_io.o \
 	data_mesh.o data_pointwise.o data_proc.o data_spec.o get_mesh.o \
 	global_parameters.o utlity.o Makefile ../make_axisem.macros 
-def_precomp_terms.o: analytic_mapping.o attenuation.o background_models.o \
+def_precomp_terms.o: boundary_faces.o analytic_mapping.o attenuation.o background_models.o \
 	commun.o data_io.o data_matr.o data_mesh.o data_pointwise.o \
 	data_proc.o data_source.o data_spec.o def_grid.o get_mesh.o \
 	get_model.o global_parameters.o pointwise_derivatives.o utlity.o Makefile ../make_axisem.macros 
@@ -127,7 +127,7 @@ get_mesh.o: background_models.o commun.o data_comm.o data_io.o data_mesh.o \
 global_parameters.o:  Makefile ../make_axisem.macros 
 interpolation.o: global_parameters.o Makefile ../make_axisem.macros 
 list.o: global_parameters.o Makefile ../make_axisem.macros 
-main.o: clocks_wrapper_solver.o commun.o data_io.o data_mesh.o data_proc.o \
+main.o: boundary_faces.o clocks_wrapper_solver.o commun.o data_io.o data_mesh.o data_proc.o \
 	data_source.o def_grid.o get_mesh.o meshes_io.o nc_routines.o \
 	nc_snapshots.o parameters.o time_evol_wave.o Makefile ../make_axisem.macros 
 pointwise_derivatives.o: data_mesh.o data_pointwise.o data_spec.o \
@@ -172,12 +172,15 @@ nc_helpers.o: data_io.o data_proc.o global_parameters.o Makefile ../make_axisem.
 nc_routines.o: clocks.o commun.o data_io.o data_mesh.o data_proc.o \
 	data_source.o data_spec.o data_time.o global_parameters.o \
 	nc_helpers.o Makefile ../make_axisem.macros 
+boundary_faces.o: commun.o data_io.o data_mesh.o data_proc.o data_source.o \
+	data_spec.o data_time.o global_parameters.o nc_helpers.o nc_routines.o \
+	utlity.o Makefile ../make_axisem.macros
 nc_snapshots.o: data_io.o data_mesh.o data_proc.o data_source.o \
 	global_parameters.o nc_helpers.o Makefile ../make_axisem.macros 
 parameters.o: attenuation.o commun.o data_comm.o data_io.o data_mesh.o \
 	data_proc.o data_source.o data_time.o global_parameters.o \
 	nc_helpers.o nc_routines.o utlity.o Makefile ../make_axisem.macros 
-time_evol_wave.o: apply_masks.o attenuation.o clocks.o commun.o data_io.o \
+time_evol_wave.o: boundary_faces.o apply_masks.o attenuation.o clocks.o commun.o data_io.o \
 	data_matr.o data_mesh.o data_pointwise.o data_proc.o data_source.o \
 	data_time.o def_precomp_terms.o global_parameters.o meshes_io.o \
 	nc_routines.o parameters.o pointwise_derivatives.o rotations.o \

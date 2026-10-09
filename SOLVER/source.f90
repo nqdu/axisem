@@ -239,13 +239,20 @@ subroutine compute_src
   use data_mesh
   use utlity
   use commun, only: broadcast_int,broadcast_dble
+
+  ! nqdu
+  !use utlity, only : inside_element
   
-  integer                          :: iel_src2,ipol_src2,jpol_src2
+  integer                          :: iel_src2
   real(kind=realkind), allocatable :: source_term(:,:,:,:)
   real(kind=realkind), allocatable :: point_source(:,:,:)
   integer                          :: ipol,jpol,ielem,k
   real(kind=dp)                    :: s,z,r,theta
   character(len=256)               :: errmsg
+
+  !nqdu source gll
+  real(kind=dp)                    :: xi_src,eta_src,ssrc
+  logical                          :: in_this_elm
 
 
   zsrc = router - src_depth
@@ -258,7 +265,10 @@ subroutine compute_src
   
   if (verbose > 1) write(69,'(/,a)')'    L O O K I N G   F O R   T H E   S O U R C E '
 
-  call find_srcloc(iel_src2, ipol_src2, jpol_src2)
+  !call find_srcloc(iel_src2, ipol_src2, jpol_src2)
+
+  !nqdu locate source by it's gll
+  call locate_src(iel_src2,xi_src,eta_src)
 
   ! @TODO: should add a test whether it is the first theta slice
 
@@ -275,7 +285,8 @@ subroutine compute_src
      if (lpr) write(6,*) '  ...explosion in the fluid'
      allocate(point_source(0:npol,0:npol,1:nel_fluid))
 
-     call define_bodyforce(point_source,iel_src2,ipol_src2,jpol_src2)
+     !call define_bodyforce(point_source,iel_src2,ipol_src2,jpol_src2)
+     call define_bodyforce2(point_source,iel_src2,xi_src,eta_src)
      source_term(:,:,:,1) = point_source / (two * pi)
      deallocate(point_source)
   else
@@ -292,13 +303,15 @@ subroutine compute_src
         case('vertforce') 
            if (lpr) write(6,*) '  ...vertical single force'
            allocate(point_source(0:npol,0:npol,1:nel_solid))
-           call define_bodyforce(point_source,iel_src2,ipol_src2,jpol_src2)
+           !call define_bodyforce(point_source,iel_src2,ipol_src2,jpol_src2)
+           call define_bodyforce2(point_source,iel_src2,xi_src,eta_src)
            source_term(:,:,:,3) = point_source / (two * pi)
            deallocate(point_source)
 
         case default
            if (lpr) write(6,*) '  ...moment tensor elements for ', src_type(2)
-           call define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
+           !call define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
+           call define_moment_tensor2(iel_src2,xi_src,eta_src,source_term)
            source_term = source_term / (2 * pi)
 
         end select
@@ -311,13 +324,15 @@ subroutine compute_src
         case ('thetaforce', 'phiforce')
            if (lpr) write(6,*) '  ...horizontal single ', src_type(2)
            allocate(point_source(0:npol,0:npol,1:nel_solid))
-           call define_bodyforce(point_source, iel_src2, ipol_src2, jpol_src2)
+           !call define_bodyforce(point_source, iel_src2, ipol_src2, jpol_src2)
+           call define_bodyforce2(point_source,iel_src2,xi_src,eta_src)
            source_term(:,:,:,1) = point_source / pi
            deallocate(point_source)
 
         case default
            if (lpr) write(6,*) '  ...moment tensor elements for ', src_type(2)
-           call define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
+           !call define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
+           call define_moment_tensor2(iel_src2,xi_src,eta_src,source_term)
            source_term = source_term / pi
 
         end select
@@ -326,7 +341,8 @@ subroutine compute_src
      case ('quadpole') poletype
         if (lpr) write(6,*)'  computing QUADRUPOLE Source with...'
         if (lpr) write(6,*)'  ...moment tensor elements for ',src_type(2)
-        call define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
+        !call define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
+        call define_moment_tensor2(iel_src2,xi_src,eta_src,source_term)
         source_term = source_term / (2 * pi)
 
      case default
@@ -582,6 +598,113 @@ subroutine find_srcloc(iel_src2, ipol_src2, jpol_src2)
 
 end subroutine find_srcloc
 !-----------------------------------------------------------------------------------------
+
+!-----------------------------------------------------------------------------------------
+subroutine locate_src(iel_src2,xi_src,eta_src)
+   use data_mesh
+   use utlity
+   use commun, only: pmin, psum_int, broadcast_log
+   use analytic_mapping, only : mapping
+   implicit none
+
+   integer,intent(out)           :: iel_src2
+   real(kind=dp),intent(out)     :: xi_src,eta_src
+
+   real(kind=dp)        :: s, z, zsrcout, dzsrc, xi, eta, candidate_dist
+   integer              :: ielem,i, count_src_procs, iproc_src
+
+   !nqdu
+   logical              :: in_it
+   real(kind=dp)        :: nodes(8,2)
+
+   ! locate source
+   ! Only allow sources in the solid region, fixated to northern axis.
+   call pcheck(zsrc < 0.0_dp .or. zsrc > router, 'Source depth is outside the model.')
+   dzsrc = huge(1.0_dp)
+   have_src = .false.
+   iel_src2 = 0
+   xi_src = -1.0_dp
+   eta_src = 0.0_dp
+   do i=1,naxel
+      ielem = ax_el(i)
+
+      ! check if source inside this element
+      call inside_element(0.0_dp,zsrc,ielem,xi,eta,s,z,in_it)
+      if (.not. in_it) cycle
+
+      nodes(:,1) = crd_nodes(lnods(ielem,:),1)
+      nodes(:,2) = crd_nodes(lnods(ielem,:),2)
+      s = mapping(-1.0_dp,eta,nodes,1,ielem)
+      z = mapping(-1.0_dp,eta,nodes,2,ielem)
+      candidate_dist = hypot(s,zsrc-z)
+      if (candidate_dist >= dzsrc) cycle
+      dzsrc = candidate_dist
+      zsrcout = z
+      iel_src2 = ielem
+      iel_src = ielem
+      xi_src = -1.0_dp
+      eta_src = eta
+      have_src = .true.
+   enddo
+
+   count_src_procs = 0
+   if (have_src) count_src_procs = 1
+   count_src_procs = psum_int(count_src_procs)
+   call pcheck(count_src_procs == 0, 'No axis element contains the source.')
+
+   ! Boundary points may be found by several ranks. Choose one owner so the
+   ! source is assembled once and the fluid/solid broadcast has a valid root.
+   iproc_src = nproc
+   if (have_src) iproc_src = mynum
+   iproc_src = int(pmin(real(iproc_src,kind=dp)))
+   have_src = have_src .and. mynum == iproc_src
+
+   if (have_src) then
+
+      ! @TODO: check if both elements are in either the solid or the fluid
+      if (iel_src > nel_fluid) then
+          iel_src = iel_src - nel_fluid
+          iel_src2 = iel_src2 - nel_fluid
+          fluid_src = .false.
+      else
+          fluid_src = .true.
+      endif
+
+
+      ! if (ipol_src /= 0) then
+      !    write(6,'(a,/,a,i7,i2,i2)') &
+      !          'ERROR: Source should be on axis, i.e. ipol_src=0, but:', &
+      !          'Source location: ielem, ipol, jpol: ', &
+      !          ielsolid(iel_src), ipol_src, jpol_src
+      !    stop
+      ! endif
+
+      write(6,*) '  ',procstrg,' found it:'
+      write(6,*) '    depth asked for [km]:', (router - zsrc) / 1000.d0
+      write(6,*) '    depth offered   [km]:', (router - zsrcout) / 1000.d0
+      write(6,*) '    difference      [km]:', dzsrc / 1000.d0
+      if (verbose>1) then
+          if (fluid_src) then
+             write(6,*) '    source element      : ', iel_src, ielfluid(iel_src)
+          else
+             write(6,*) '    source element      : ', iel_src, ielsolid(iel_src)
+          endif
+      end if
+
+      if (verbose > 1) then
+         write(69,*) '  ',procstrg,' found it:'
+         write(69,*) '    depth asked for [km]:',(router-zsrc)/1000.d0
+         write(69,*) '    depth offered   [km]:',(router-zsrcout)/1000.d0
+         write(69,*) '    difference      [km]:',dzsrc/1000.d0
+         write(69,*) '    source element and location coordinates eta:', iel_src,eta_src
+      endif
+
+      zsrc = zsrcout
+   endif
+
+   call broadcast_log(fluid_src, iproc_src)
+
+end subroutine locate_src
 
 !-----------------------------------------------------------------------------------------
 subroutine gauss
@@ -978,6 +1101,44 @@ subroutine define_bodyforce(f, iel_src2, ipol_src2, jpol_src2)
 end subroutine define_bodyforce
 !-----------------------------------------------------------------------------------------
 
+subroutine define_bodyforce2(f, iel_src2, xi_src,eta_src)
+
+   use data_mesh
+   use utlity
+   use commun, only: pdistsum_solid_1D, pdistsum_fluid
+   use data_spec, only : gll => eta, glj => xi_k
+
+   real(kind=realkind), intent(out) :: f(0:,0:,:)
+   integer, intent(in)              :: iel_src2
+   real(kind=dp),intent(in)         :: xi_src,eta_src
+   integer                          :: ipol, jpol
+   real(kind=dp)                    :: coefs(0:npol,0:npol)
+
+   f(:,:,:) = zero
+
+   if (have_src) then
+      !f(ipol_src, jpol_src, iel_src) = one
+      !f(ipol_src2, jpol_src2, iel_src2) = one
+      coefs(:,:) = zero
+      do jpol=0,npol
+         do ipol=0,npol
+            coefs(ipol,jpol) = one
+            f(ipol,jpol,iel_src2) = real(lagrange_interpol_2D_td(glj,gll,coefs,xi_src,eta_src),kind=realkind)
+            coefs(ipol,jpol) = zero
+         enddo
+      enddo
+      !print*,f(:,:,iel_src)
+   endif
+
+   ! assembly
+   if (fluid_src) then
+      call pdistsum_fluid(f)
+   else
+      call pdistsum_solid_1D(f)
+   endif
+
+ end subroutine define_bodyforce2
+
 !-----------------------------------------------------------------------------------------
 !> Defines the moment tensor elements for the given source type in all 
 !! elements having non-zero source contributions,
@@ -1225,6 +1386,275 @@ subroutine define_moment_tensor(iel_src2, ipol_src2, jpol_src2, source_term)
 
 end subroutine define_moment_tensor
 !-----------------------------------------------------------------------------------------
+
+!-----------------------------------------------------------------------------------------
+!> Defines the moment tensor elements for the given source type in all
+!! elements having non-zero source contributions,
+!! using pointwise derivatives of arbitrary scalar functions.
+subroutine define_moment_tensor2(iel_src2, xi_src,eta_src, source_term)
+
+   use data_mesh
+
+   use apply_masks
+   use utlity
+   use pointwise_derivatives
+   use commun, only: pdistsum_solid, psum_int
+   use data_spec, only : gll => eta, glj => xi_k,wt,wt_axial_k
+
+   integer, intent(in)              :: iel_src2
+   real(kind=realkind), intent(out) :: source_term(0:npol,0:npol,nel_solid,3)
+   integer                          :: liel_src, lipol_src, ljpol_src
+   real(kind=dp),intent(in)         :: xi_src,eta_src
+
+   real(kind=realkind), allocatable :: ws(:,:,:), dsws(:,:,:), dzwz(:,:,:)
+   real(kind=realkind), allocatable :: ds(:), dz(:)
+   real(kind=dp)                    :: coefs(0:npol,0:npol),s
+
+   integer                          :: ielem, ipol, jpol,i
+
+   allocate(ws(0:npol,0:npol,1))
+   allocate(dsws(0:npol,0:npol,1))
+   allocate(dzwz(0:npol,0:npol,1))
+   allocate(ds(0:npol),dz(0:npol))
+
+   ! global number of source elements (in case source is on processor boundary)
+   !nsrcelem_glob = psum_int(nsrcelem)
+
+   !if (verbose > 1 ) write(69,*) 'nsrcelem_glob =', nsrcelem_glob
+
+   if (have_src) then
+      ! compute ws/coefs
+      ! coefs(i,j) = l_i(xi_s) l_j(eta_s)
+      i=1
+      coefs(:,:) = zero
+      do ipol=0,npol
+         do jpol=0,npol
+            coefs(ipol,jpol) = one
+            s = lagrange_interpol_2D_td(glj,gll,coefs,xi_src,eta_src)
+            !print*,s
+            ws(ipol,jpol,1) = real(s,kind=realkind)
+            coefs(ipol,jpol) = zero
+            !print*,ipol,jpol,ws(ipol,jpol,1)
+         enddo
+      enddo
+      coefs(:,:) = ws(:,:,i)
+
+      ! physical source location can only be in 2 elements
+      liel_src = iel_src2
+      do i=1,1
+         do ipol = 0,npol
+            lipol_src = ipol
+            do jpol = 0,npol
+               ljpol_src = jpol
+               ws(:,:,i) = zero
+               ws(ipol,jpol,i) = one
+               call dsdf_elem_solid(dsws(:,:,i), ws(:,:,i), iel_src)
+               call dzdf_elem_solid(dzwz(:,:,i), ws(:,:,i), iel_src)
+
+               poletype:  select case (src_type(1))
+
+               ! monopole
+               case ('monopole') poletype
+                  select case (src_type(2))
+
+                  case ('explosion')
+                     if (ipol==0 .and. jpol==0  .and. lpr) &
+                          write(6,*)'  ',procstrg, &
+                         'computing source s- and z-components for explosion'
+
+                     ! source_term(ipol,jpol,liel_src,1) = &
+                     !      two * dsws(lipol_src,ljpol_src,i)
+                     ! source_term(ipol,jpol,liel_src,3) = &
+                     !      dzwz(lipol_src,ljpol_src,i)
+                     source_term(ipol,jpol,iel_src,1) =  &
+                            two * sum(dsws(:,:,i) * coefs)
+                     source_term(ipol,jpol,iel_src,3) =  &
+                            sum(dzwz(:,:,i) * coefs)
+
+                  case ('mtt_p_mpp' )
+                     if (ipol==0 .and. jpol==0 .and. lpr)  &
+                          write(6,*)'  ',procstrg, &
+                          'computing source s-component for Mxx+Myy'
+                     ! source_term(ipol,jpol,liel_src,1) = &
+                     !       dsws(lipol_src,ljpol_src,i)
+                     source_term(ipol,jpol,iel_src,1) = sum(dsws(:,:,i) * coefs)
+
+                  case ('mrr')
+                     if (ipol==0 .and. jpol==0 .and. lpr)  &
+                          write(6,*)'  ',procstrg, &
+                          'computing source field z-component for Mzz'
+                     ! source_term(ipol,jpol,liel_src,3) = &
+                     !      dzwz(lipol_src,ljpol_src,i)
+                     source_term(ipol,jpol,iel_src,3) = &
+                          sum(dzwz(:,:,i) * coefs)
+
+                  case default
+                     write(6,'(a,a,/,a,a,a)') &
+                          procstrg, 'PROBLEM: Didn"t compute any source: ', &
+                          procstrg, 'Monopole source doesn"t exist for ', src_type(2)
+                     stop
+                  end select
+
+               ! dipole
+               case ('dipole') poletype
+                  select case(src_type(2))
+
+                  case ('mtr','mpr')
+                     if (ipol==0 .and. jpol==0 .and. lpr)  &
+                          write(6,*) '  computing source + and z-components for Mtr'
+                     ! source_term(ipol, jpol, liel_src, 1) =  &
+                     !      dzwz(lipol_src, ljpol_src, i)
+                     ! source_term(ipol, jpol, liel_src, 3) =  &
+                     !      dsws(lipol_src, ljpol_src, i)
+                     source_term(ipol,jpol,iel_src,1) = sum(dzwz(:,:,i) * coefs)
+                     source_term(ipol,jpol,iel_src,3) = sum(dsws(:,:,i) * coefs)
+
+                  case default
+                     write(6,'(a,a,/,a,a,a)') &
+                          procstrg, 'PROBLEM: Didn"t compute any source!', &
+                          procstrg, 'Dipole source doesn"t exist for ', src_type(2)
+                     stop
+                  end select
+
+               ! quadrupole
+               case ('quadpole') poletype
+                  select case (src_type(2))
+
+                  case ('mtp','mtt_m_mpp')
+                     if (ipol==0 .and. jpol==0 .and. lpr)  &
+                          write(6,*) '  computing source s- and phi-components for Mtp'
+                     ! source_term(ipol,jpol,liel_src,1) = &
+                     !      dsws(lipol_src,ljpol_src,i)
+                     ! source_term(ipol,jpol,liel_src,2) = &
+                     !      dsws(lipol_src,ljpol_src,i)
+                     source_term(ipol,jpol,iel_src,1) = &
+                          sum(dsws(:,:,i) * coefs)
+                     source_term(ipol,jpol,iel_src,2) = &
+                          sum(dsws(:,:,i) * coefs)
+                  case default
+                     write(6,'(a,a,/,a,a,a)') &
+                          procstrg, "PROBLEM: Didn't compute any source!", &
+                          procstrg, "Quadrupole doesn't exist for", src_type(2)
+                     stop
+                  end select
+               end select poletype
+            end do !jpol
+         end do ! ipol
+      enddo ! multiple source elements
+
+      ! If spread over multiple elements (i.e., if point source coincides
+      ! with element edge/corner), need to divide by global source element number
+      !source_term = source_term / real(nsrcelem_glob)
+
+      if (verbose > 1) write(69,*) 'source term minmax:', &
+                                   minval(source_term), maxval(source_term)
+   endif ! have_src
+
+   !if(have_src) then
+   !print*,source_term(:,:,iel_src2,1)
+   !print*,' '
+   !print*,source_term(:,:,iel_src2,2)
+   !print*,' '
+   !print*,source_term(:,:,iel_src2,3)
+   !endif
+
+   ! assembly
+   if (verbose > 1) write(69,*) '  ', procstrg, 'assembling the source term....'
+   call pdistsum_solid(source_term)
+
+    ! cut out round-off errors
+    do ielem=1, nel_solid
+       do ipol=0, npol
+          do jpol=0, npol
+             if (abs(source_term(ipol,jpol,ielem,1)) < smallval) &
+                  source_term(ipol,jpol,ielem,1) = zero
+             if (abs(source_term(ipol,jpol,ielem,2)) < smallval) &
+                  source_term(ipol,jpol,ielem,2) = zero
+             if (abs(source_term(ipol,jpol,ielem,3)) < smallval) &
+                  source_term(ipol,jpol,ielem,3) = zero
+          enddo
+       enddo
+    enddo
+
+   if (have_src) then
+      if (maxval(abs(source_term)) == zero) then
+         write(6,'(a,a,/,a,a)') procstrg, 'PROBLEM: No source generated!', &
+                                procstrg, 'Bye from define_mono_moment'
+         stop
+      endif
+   endif
+
+   ! mask source
+   select case (src_type(1))
+   case ('monopole')
+      call apply_axis_mask_onecomp(source_term, nel_solid, ax_el_solid, &
+                                   naxel_solid)
+   case ('dipole')
+      call apply_axis_mask_twocomp(source_term, nel_solid, ax_el_solid, &
+                                   naxel_solid)
+   case ('quadpole')
+      call apply_axis_mask_threecomp(source_term, nel_solid, ax_el_solid, &
+                                     naxel_solid)
+   end select
+
+   if (lpr .and. verbose > 0) &
+      write(6,*)'  ...masked the source'
+
+   ! if (have_src) then
+   !    ! write out the source element only
+   !    fmt1 = "(K(1pe12.3))"
+   !    write(fmt1(2:2),'(i1.1)') npol + 1
+
+   !    if (verbose > 1) then
+
+   !       write(69,'(/,a)') '  *^*^*^*^*^*^* The moment-tensor source term *^*^*^*^*^**^*^'
+
+   !       liel_src = iel_src
+   !       lipol_src = ipol_src
+   !       ljpol_src = jpol_src
+
+   !       do i =1, nsrcelem
+   !          if (i == 2) then
+   !             liel_src = iel_src2
+   !             lipol_src = ipol_src2
+   !             ljpol_src = jpol_src2
+   !          endif
+
+   !          write(69,*) 'iel,jpol,r:', liel_src, ljpol_src, &
+   !               rcoord(lipol_src,ljpol_src,ielsolid(liel_src)) / 1.d3
+   !          write(69,*)'North| s-dir -->'
+   !          if (src_type(1)=='dipole') then
+   !             write(69,*) '  ', src_type(2), '+ component'
+   !          else
+   !             write(69,*) '  ', src_type(2), 's component'
+   !          endif
+   !          do jpol=npol, 0, -1
+   !             write(69,fmt1)(source_term(ipol,jpol,liel_src,1), ipol=0, npol)
+   !          enddo
+   !          write(69,*)
+
+   !          if (src_type(1)=='dipole') then
+   !             write(69,*)src_type(2), '- component'
+   !          else
+   !             write(69,*)src_type(2), 'phi component'
+   !          endif
+   !          do jpol=npol, 0, -1
+   !             write(69,fmt1)(source_term(ipol,jpol,liel_src,2), ipol=0,npol)
+   !          enddo
+   !          write(69,*)
+
+   !          write(69,*)src_type(2),'z component'
+   !          do jpol=npol, 0, -1
+   !             write(69,fmt1)(source_term(ipol,jpol,liel_src,3), ipol=0,npol)
+   !          enddo
+   !          write(69,*)
+   !          write(69,*)
+   !       enddo
+   !    endif
+   ! endif ! have_src
+
+ end subroutine define_moment_tensor2
+ !-----------------------------------------------------------------------------------------
 
 end module source
 !=========================================================================================

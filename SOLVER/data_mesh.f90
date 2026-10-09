@@ -33,6 +33,8 @@ module data_mesh
   ! Any global arrays containing properties inside elements are defined in data_matr.
   
   use global_parameters
+  use kdtree2_module, only: kdkind, kdtree2, kdtree2_result, &
+                            kdtree2_create, kdtree2_destroy, kdtree2_n_nearest
   implicit none
   
   public 
@@ -57,6 +59,17 @@ module data_mesh
   ! global numbering array for the solid and fluid assembly
   integer, protected, allocatable, dimension(:) :: igloc_solid ! (npoint_solid)
   integer, protected, allocatable, dimension(:) :: igloc_fluid ! (npoint_fluid)
+
+  ! Element centers and search trees used while locating receivers and faces.
+  integer, parameter :: nearest_element_count = 10
+  real(kind=kdkind), pointer :: element_midpoint(:,:) => null()
+  real(kind=kdkind), pointer :: solid_midpoint(:,:) => null()
+  real(kind=kdkind), pointer :: fluid_midpoint(:,:) => null()
+  type(kdtree2), pointer :: element_tree => null()
+  type(kdtree2), pointer :: solid_tree => null()
+  type(kdtree2), pointer :: fluid_tree => null()
+  integer, allocatable :: solid_element_index(:)
+  integer, allocatable :: fluid_element_index(:)
 
   ! Misc definitions
   integer                           :: nsize
@@ -136,6 +149,8 @@ module data_mesh
   real(kind=sp), allocatable   :: surfcoord(:)
   integer                      :: ielepi, ielantipode, ielequ
   integer, allocatable         :: recfile_el(:,:), loc2globrec(:)
+  ! Tensor-product interpolation weights for each receiver's containing element.
+  real(kind=dp), allocatable   :: recfile_weights(:,:,:)
   logical                      :: have_epi, have_equ, have_antipode
   real                         :: dtheta_rec
   
@@ -186,6 +201,109 @@ module data_mesh
   real(kind=realkind), dimension(:,:,:), allocatable   :: solid_absorbing_gamma
 
 contains
+
+!-----------------------------------------------------------------------------------------
+!> Cache physical element centers and build phase-specific local search trees.
+subroutine build_element_trees(midpoints)
+   real(kind=dp), intent(in) :: midpoints(2,nelem)
+   integer :: i
+
+   if (associated(element_midpoint)) call destroy_element_trees
+   allocate(element_midpoint(2,nelem),solid_element_index(nelem),fluid_element_index(nelem))
+   element_midpoint = real(midpoints,kind=kdkind)
+   solid_element_index = 0
+   fluid_element_index = 0
+   do i=1,nel_solid
+      solid_element_index(ielsolid(i)) = i
+   enddo
+   do i=1,nel_fluid
+      fluid_element_index(ielfluid(i)) = i
+   enddo
+
+   if (nelem > 1) element_tree => kdtree2_create(element_midpoint,sort=.true.)
+   if (nel_solid > 0) then
+      allocate(solid_midpoint(2,nel_solid))
+      solid_midpoint = element_midpoint(:,ielsolid)
+      if (nel_solid > 1) solid_tree => kdtree2_create(solid_midpoint,sort=.true.)
+   endif
+   if (nel_fluid > 0) then
+      allocate(fluid_midpoint(2,nel_fluid))
+      fluid_midpoint = element_midpoint(:,ielfluid)
+      if (nel_fluid > 1) fluid_tree => kdtree2_create(fluid_midpoint,sort=.true.)
+   endif
+end subroutine build_element_trees
+
+!-----------------------------------------------------------------------------------------
+!> Return up to ten nearest local element IDs (1-based global mesh order).
+!! phase: 0=all, 1=solid, 2=fluid.
+subroutine nearest_mesh_elements(s,z,phase,elements,nfound)
+   real(kind=dp), intent(in) :: s,z
+   integer, intent(in) :: phase
+   integer, intent(out) :: elements(nearest_element_count),nfound
+   real(kind=kdkind), target :: query(2)
+   type(kdtree2_result) :: results(nearest_element_count)
+   integer :: i,navailable
+
+   elements = 0
+   select case(phase)
+   case(0)
+      navailable = nelem
+   case(1)
+      navailable = nel_solid
+   case(2)
+      navailable = nel_fluid
+   case default
+      error stop 'Invalid element search phase'
+   end select
+   nfound = min(nearest_element_count,navailable)
+   if (nfound == 0) return
+   if (nfound == 1) then
+      select case(phase)
+      case(0)
+         elements(1) = 1
+      case(1)
+         elements(1) = ielsolid(1)
+      case(2)
+         elements(1) = ielfluid(1)
+      end select
+      return
+   endif
+
+   query = [real(s,kind=kdkind),real(z,kind=kdkind)]
+   select case(phase)
+   case(0)
+      call kdtree2_n_nearest(element_tree,query,nfound,results)
+      elements(1:nfound) = [(results(i)%idx,i=1,nfound)]
+   case(1)
+      call kdtree2_n_nearest(solid_tree,query,nfound,results)
+      elements(1:nfound) = [(ielsolid(results(i)%idx),i=1,nfound)]
+   case(2)
+      call kdtree2_n_nearest(fluid_tree,query,nfound,results)
+      elements(1:nfound) = [(ielfluid(results(i)%idx),i=1,nfound)]
+   end select
+end subroutine nearest_mesh_elements
+
+!-----------------------------------------------------------------------------------------
+!> Release the search data after station and face preparation.
+subroutine destroy_element_trees
+   if (associated(element_tree)) then
+      call kdtree2_destroy(element_tree)
+      nullify(element_tree)
+   endif
+   if (associated(solid_tree)) then
+      call kdtree2_destroy(solid_tree)
+      nullify(solid_tree)
+   endif
+   if (associated(fluid_tree)) then
+      call kdtree2_destroy(fluid_tree)
+      nullify(fluid_tree)
+   endif
+   if (associated(element_midpoint)) deallocate(element_midpoint)
+   if (associated(solid_midpoint)) deallocate(solid_midpoint)
+   if (associated(fluid_midpoint)) deallocate(fluid_midpoint)
+   if (allocated(solid_element_index)) deallocate(solid_element_index)
+   if (allocated(fluid_element_index)) deallocate(fluid_element_index)
+end subroutine destroy_element_trees
 
 !-----------------------------------------------------------------------------------------
 !> Read parameters formerly in mesh_params.h 

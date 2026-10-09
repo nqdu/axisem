@@ -39,7 +39,7 @@ SOURCE_FUNCTION     gauss_0
 # KL_O8m17:  experimental
 # SS_35o10:  experimental
 
-TIME_SCHEME     newmark2
+TIME_SCHEME     symplec4
 
 
 ##################### OUTPUT OPTIONS ###########################################
@@ -59,7 +59,7 @@ USE_NETCDF          true
 # every 5% of the total runtime to have at least something, should the solver
 # run crash. However, this affects performance slightly, so you might want to
 # turn it of for runs on safe systems.
-CHECKPOINTING       true
+CHECKPOINTING       false
 
 # Size of buffer for wavefield dumps. This is only used for the kernel wavefield
 # output. Determines, how many time steps should be held in memory by each 
@@ -68,7 +68,7 @@ CHECKPOINTING       true
 # memory per CPU. When using CHUNK_TIME_TRACES and many cores, a value larger
 # then the number of strain samples might be appropriate.
 # Default value: 64
-NETCDF_DUMP_BUFFER  64
+NETCDF_DUMP_BUFFER  128
 
 # Chunking of the kernel wavefields: Default is snapshots to write to contiguous
 # regions on the drive. When running on many cores and using collective IO, it
@@ -133,6 +133,9 @@ MESH_TEST           false
 # Save necessary wavefields for Kernel calculation or Instaseis databases
 # N.b. Kernel calculation needs MCKernel (sold separately)
 KERNEL_WAVEFIELDS   true
+# Locate boundary_surfaces.dat (25 lon lat depth_km rows per face) and save
+# each touched element's GLL wavefield once; point 13 selects solid or fluid.
+SAVE_BDRY_FACES     true
 
 # different modes of dumping wavefields for kernel:
 #  - fullfields: strain and velocity at a subset of local GLL points (see below)
@@ -141,7 +144,10 @@ KERNEL_WAVEFIELDS   true
 KERNEL_DUMPTYPE     displ_only
 
 # Samples per period
-KERNEL_SPP          4
+KERNEL_SPP          32
+
+# dumping starttime
+DUMP_T0        1116.93
 
 # source vicinity in wavefields? 
 # igno (default)
@@ -151,20 +157,20 @@ KERNEL_SOURCE       igno
 
 # GLL points to save, starting and ending GLL point index 
 # (overwritten with 0 and npol for dumptype displ_only)
-KERNEL_IBEG         1
-KERNEL_IEND         3
-KERNEL_JBEG         1
-KERNEL_JEND         3
+KERNEL_IBEG         0
+KERNEL_IEND         4
+KERNEL_JBEG         0
+KERNEL_JEND         4
 
 # minimal and maximal colatitude in degree for kernel wavefields
 # (only for dumptype displ_only)
-KERNEL_COLAT_MIN   0.
-KERNEL_COLAT_MAX   180.
+KERNEL_COLAT_MIN        68.114899
+KERNEL_COLAT_MAX        101.785179
 
 # minimal and maximal radius in km for kernel wavefields
 # (only for dumptype displ_only)
-KERNEL_RMIN        6171.
-KERNEL_RMAX        7000.
+KERNEL_RMIN        5921
+KERNEL_RMAX        7000
 
 ######################## ATTENUATION ###########################################
 # number of standard linear solids (default: 5)

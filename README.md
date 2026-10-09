@@ -70,6 +70,44 @@ of RAM, see manual.
 
 8) All data-related output is in `<RUN_NAME>/Data/`
 
+For `STATIONS` receivers, the solver places each station at depth
+`burial_depth - elevation` (metres), clipped between zero and the model's
+outer radius. It searches the elastic mesh at that depth and interpolates
+displacement within the containing element. A station in the fluid domain or
+outside the mesh cannot be recorded.
+
+### Boundary-face wavefields
+
+Set `KERNEL_WAVEFIELDS true`, `USE_NETCDF true`, and `SAVE_BDRY_FACES true`
+in `SOLVER/inparam_advanced`. Generate `SOLVER/boundary_faces.dat` with
+AxiSEMLib's `surface_merge.py`, or edit `SOLVER/boundary_surfaces.dat` to contain your
+face coordinates. `submit.csh` copies the selected input into the run directory. The file
+ships with five example faces: four solid (100, 500, 1500, and 2500 km) and
+one fluid (4000 km). The file has no header and contains one
+`longitude latitude depth_km` row per point,
+ordered as consecutive 5×5 faces. Each face's 13th row determines whether its
+25 points are sampled in the solid or fluid; points outside that phase cause
+an error. `DUMP_T0` and `KERNEL_SPP` control the sampling times.
+
+The run writes `Data/boundary_wavefields.nc4`. It stores each distinct element
+once: `disp_s` and `disp_z` have dimensions `(time, solid_element, npol, npol)`,
+`disp_p` has the same dimensions for dipole and quadrupole sources, and `chi`
+has dimensions `(time, fluid_element, npol, npol)`. The last two axes are the
+element's GLL nodes. The displacement components retain AxiSEM's source-centered
+cylindrical modal convention.
+
+`boundary_wavefields.nc4/Mesh` contains geometry, material properties, GLL
+coordinates, and connectivity for these distinct elements. The 0-based
+`solid_element_to_mesh` and `fluid_element_to_mesh` arrays index `Mesh/elements`. The
+`point` dimension retains the input faces for lookup: `face_phase` is 0 for
+solid or 1 for fluid, `point_element_slot` selects the appropriate wavefield
+element, and `xi`/`eta` locate the original point within it. `element_id` is
+the 0-based global solver ID for each point. `source_phi` gives its azimuth in
+the source frame. The regular kernel wavefields and Mesh group are omitted
+from `axisem_output.nc4` in this mode.
+The solver log reports each point's owning process, global element, and
+meridional location error (m).
+
 9) Convolution with a STF and summation for a moment source is done by running
    `postprocessing.csh` in `<RUN_NAME>`
 
