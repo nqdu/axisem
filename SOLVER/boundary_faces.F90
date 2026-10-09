@@ -188,6 +188,8 @@ contains
        call barrier
        if (mynum /= rank) cycle
        do i=1,nlocal
+          ! Report only the first 1000 input points across all processes.
+          if (point_id(i) > 1000) cycle
           write(6,'(a,i0,a,i0,a,i0,a,es14.5)') &
                '  boundary point=',point_id(i), ' proc=',mynum, &
                ' global element=',global_element_id(i), &
