@@ -376,7 +376,7 @@ subroutine read_inparam_advanced
   use data_mesh,    only: naxel, meshname, do_mesh_tests
   use commun,       only: broadcast_int, broadcast_log, broadcast_char, broadcast_dble
 
-  integer              :: iinparam_advanced=500, ioerr
+  integer              :: iinparam_advanced=500, ioerr, filename_end
   integer              :: npol_max = 12
   character(len=256)   :: line
   character(len=256)   :: keyword, keyvalue
@@ -396,6 +396,7 @@ subroutine read_inparam_advanced
 
   dump_wavefields = .false.
   save_bdry_faces = .false.
+  bdry_faces_file = 'boundary_faces.dat'
   dump_type = 'fullfields'
   strain_samp = 8
   src_dump_type = 'mask'
@@ -484,6 +485,16 @@ subroutine read_inparam_advanced
 
          case('SAVE_BDRY_FACES')
              read(keyvalue,*) save_bdry_faces
+
+         case('BDRY_FACES_FILE')
+             ! Preserve slashes in unquoted paths and allow quoted filenames.
+             keyvalue = adjustl(line(index(line,trim(keyword))+len_trim(keyword):))
+             if (keyvalue(1:1) == '"' .or. keyvalue(1:1) == "'") then
+                 read(keyvalue,*) bdry_faces_file
+             else
+                 filename_end = scan(keyvalue,' '//achar(9)//'#')
+                 bdry_faces_file = keyvalue(:filename_end-1)
+             endif
 
          case('KERNEL_DUMPTYPE')
              read(keyvalue,*) dump_type
@@ -629,6 +640,7 @@ subroutine read_inparam_advanced
   call broadcast_log(do_mesh_tests, 0) 
   call broadcast_log(dump_wavefields, 0) 
   call broadcast_log(save_bdry_faces, 0)
+  call broadcast_char(bdry_faces_file, 0)
   call broadcast_char(dump_type, 0) 
   
   call broadcast_dble(strain_samp, 0) 
@@ -794,6 +806,8 @@ subroutine check_basic_parameters
   call pcheck(dump_wavefields .and. .not. use_netcdf, errmsg)
   call pcheck(save_bdry_faces .and. .not. dump_wavefields, &
               'SAVE_BDRY_FACES requires KERNEL_WAVEFIELDS.')
+  call pcheck(save_bdry_faces .and. len_trim(bdry_faces_file) == 0, &
+              'BDRY_FACES_FILE must not be empty.')
 
 14 format('  WARNING: Overriding',a19,' with:',f8.3,' seconds')
 

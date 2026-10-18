@@ -75,15 +75,19 @@ For `STATIONS` receivers, the solver places each station at depth
 outer radius. It searches the elastic mesh at that depth and interpolates
 displacement within the containing element. A station in the fluid domain or
 outside the mesh cannot be recorded.
+Receiver location uses an absolute physical residual tolerance of `1e-3 m`
+(1 mm), checked after clamping the reference coordinates used for interpolation.
+Source location uses the same 1 mm tolerance, checked after placing the source
+on the symmetry axis and clamping its interpolation coordinate.
 
 ### Boundary-face wavefields
 
 Set `KERNEL_WAVEFIELDS true`, `USE_NETCDF true`, and `SAVE_BDRY_FACES true`
-in `SOLVER/inparam_advanced`. Generate `SOLVER/boundary_faces.dat` with
-AxiSEMLib's `surface_merge.py`, or edit `SOLVER/boundary_surfaces.dat` to contain your
-face coordinates. `submit.csh` copies the selected input into the run directory. The file
-ships with five example faces: four solid (100, 500, 1500, and 2500 km) and
-one fluid (4000 km). The file has no header and contains one
+in `SOLVER/inparam_advanced`, and set `BDRY_FACES_FILE boundary_faces.dat` to
+select the coordinate file. Generate it with AxiSEMLib's `surface_merge.py`, or
+provide your own face coordinates. Relative paths are copied into each run
+directory by `submit.csh`; absolute paths are used directly.
+The file has no header and contains one
 `longitude latitude depth_km` row per point,
 ordered as consecutive 5×5 faces. Each face's 13th row determines whether its
 25 points are sampled in the solid or fluid; points outside that phase cause
@@ -106,7 +110,9 @@ the 0-based global solver ID for each point. `source_phi` gives its azimuth in
 the source frame. The regular kernel wavefields and Mesh group are omitted
 from `axisem_output.nc4` in this mode.
 The solver log reports each point's owning process, global element, and
-meridional location error (m).
+meridional location error (m), computed from the saved, clamped `xi`/`eta`.
+Boundary-point location uses the same absolute physical residual tolerance of
+`1e-3 m` (1 mm) and rejects elements whose clamped coordinates exceed it.
 
 9) Convolution with a STF and summation for a moment source is done by running
    `postprocessing.csh` in `<RUN_NAME>`

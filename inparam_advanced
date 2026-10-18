@@ -133,9 +133,10 @@ MESH_TEST           false
 # Save necessary wavefields for Kernel calculation or Instaseis databases
 # N.b. Kernel calculation needs MCKernel (sold separately)
 KERNEL_WAVEFIELDS   true
-# Locate boundary_surfaces.dat (25 lon lat depth_km rows per face) and save
+# Locate boundary-face points (25 lon lat depth_km rows per face) and save
 # each touched element's GLL wavefield once; point 13 selects solid or fluid.
 SAVE_BDRY_FACES     true
+BDRY_FACES_FILE     boundary_faces.dat
 
 # different modes of dumping wavefields for kernel:
 #  - fullfields: strain and velocity at a subset of local GLL points (see below)
@@ -146,7 +147,7 @@ KERNEL_DUMPTYPE     displ_only
 # Samples per period
 KERNEL_SPP          32
 
-# dumping starttime 
+# dumping starttime
 DUMP_T0        1116.93
 
 # source vicinity in wavefields? 

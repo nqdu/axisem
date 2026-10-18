@@ -27,10 +27,12 @@ if ( { make -j 5 all } == 0 ) then
 endif
 
 set bgmodel = `grep "^BACKGROUND_MODEL" inparam_mesh | awk '{print $2}'`
+set model_name = "$bgmodel"
 if ( $bgmodel == 'external') then
   set fnam_extmodel = `grep "^EXT_MODEL" inparam_mesh | awk '{print $2}'`
   # Clean file name of "
   set fnam_extmodel = `echo "$fnam_extmodel" | sed 's/\"//g'`
+  set model_name = "$fnam_extmodel:t:r"
   echo "Using external mesh file " $fnam_extmodel
   if ( ! -f $fnam_extmodel ) then
     echo "External mesh " $fnam_extmodel " does not exist!"
@@ -116,7 +118,9 @@ else
 endif
 
 echo 'xmesh submitted, output in "OUTPUT"'
+set mesh_period = `grep "^DOMINANT_PERIOD" inparam_mesh | awk '{print $2}'`
+set mesh_name = "${model_name}.${mesh_period}S"
 echo "After the run, move the mesh to a new directory <meshdir> via:"
-echo "./movemesh <meshdir>"
-echo "This will be located in ../SOLVER/MESHES/<meshdir>"
+echo "./movemesh.csh $mesh_name"
+echo "This will be located in ../SOLVER/MESHES/$mesh_name"
 

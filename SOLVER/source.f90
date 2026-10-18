@@ -610,6 +610,7 @@ subroutine locate_src(iel_src2,xi_src,eta_src)
    integer,intent(out)           :: iel_src2
    real(kind=dp),intent(out)     :: xi_src,eta_src
 
+   real(kind=dp),parameter :: location_tolerance_m = 1.0e-3_dp
    real(kind=dp)        :: s, z, zsrcout, dzsrc, xi, eta, candidate_dist
    integer              :: ielem,i, count_src_procs, iproc_src
 
@@ -632,11 +633,14 @@ subroutine locate_src(iel_src2,xi_src,eta_src)
       call inside_element(0.0_dp,zsrc,ielem,xi,eta,s,z,in_it)
       if (.not. in_it) cycle
 
+      ! Score the axis coordinates used to assemble the source, after clipping.
+      eta = max(-1.0_dp,min(1.0_dp,eta))
       nodes(:,1) = crd_nodes(lnods(ielem,:),1)
       nodes(:,2) = crd_nodes(lnods(ielem,:),2)
       s = mapping(-1.0_dp,eta,nodes,1,ielem)
       z = mapping(-1.0_dp,eta,nodes,2,ielem)
       candidate_dist = hypot(s,zsrc-z)
+      if (candidate_dist > location_tolerance_m) cycle
       if (candidate_dist >= dzsrc) cycle
       dzsrc = candidate_dist
       zsrcout = z

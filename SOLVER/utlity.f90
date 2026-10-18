@@ -390,7 +390,7 @@ function lagrange_interpol_2D_td(points1, points2, coefficients, x1, x2) result(
 end function lagrange_interpol_2D_td
 
 !-----------------------------------------------------------------------------------------
-subroutine inside_element(s,z,iel,xi,eta,sloc,zloc,in_it)
+subroutine inside_element(s,z,iel,xi,eta,sloc,zloc,in_it,absolute_tolerance)
 ! check if (s,z) is in element (iel), if true, also compute it's local coordinates (xi,eta)
    use data_mesh,only : crd_nodes, lnods
    use analytic_mapping, only : mapping,compute_partial_derivatives
@@ -400,14 +400,19 @@ subroutine inside_element(s,z,iel,xi,eta,sloc,zloc,in_it)
    real(kind=dp),intent(out) :: xi,eta,sloc,zloc
    integer, intent(in)       :: iel
    logical,intent(out)       :: in_it
+   ! Optional physical residual tolerance in metres; defaults to 1 mm.
+   real(kind=dp),intent(in),optional :: absolute_tolerance ! metres
 
    !local variables
    integer                   :: i
    integer,parameter         :: maxiter = 20
    real(kind=dp),parameter   :: tol = 1.0e-3
    real(kind=dp)             :: nodes(8,2),ds,dz,dist,jaco_det,jaco(2,2),inv_jaco(2,2)
+   real(kind=dp)             :: residual_tolerance
 
    in_it = .false.
+   residual_tolerance = 1.0e-3_dp
+   if (present(absolute_tolerance)) residual_tolerance = absolute_tolerance
    ! compute control coordinates in this element
    nodes(:,1) = crd_nodes(lnods(iel,:),1)
    nodes(:,2) = crd_nodes(lnods(iel,:),2)
@@ -424,7 +429,7 @@ subroutine inside_element(s,z,iel,xi,eta,sloc,zloc,in_it)
 
      ! check convergence
      dist = hypot(ds,dz)
-     if (dist < 1.0e-7_dp * max(1.0_dp, hypot(s,z))) then
+     if (dist < residual_tolerance) then
        exit
      endif
 
@@ -446,7 +451,7 @@ subroutine inside_element(s,z,iel,xi,eta,sloc,zloc,in_it)
    zloc = mapping(xi,eta,nodes,2,iel)
 
    ! check inside this element
-   in_it = (hypot(s-sloc,z-zloc) <= 1.0e-7_dp * max(1.0_dp,hypot(s,z)) .and. &
+   in_it = (hypot(s-sloc,z-zloc) <= residual_tolerance .and. &
            xi >= -1 - tol .and. &
            xi <= 1 + tol .and. &
            eta >= -1 - tol .and. &

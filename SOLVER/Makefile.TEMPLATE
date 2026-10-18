@@ -134,7 +134,7 @@ pointwise_derivatives.o: data_mesh.o data_pointwise.o data_spec.o \
 	global_parameters.o unrolled_loops.o Makefile ../make_axisem.macros 
 rotations.o: data_io.o data_mesh.o data_proc.o data_source.o \
 	global_parameters.o Makefile ../make_axisem.macros 
-seismograms.o: commun.o data_io.o data_mesh.o data_proc.o data_source.o \
+seismograms.o: analytic_mapping.o commun.o data_io.o data_mesh.o data_proc.o data_source.o \
 	data_time.o global_parameters.o nc_routines.o rotations.o utlity.o Makefile ../make_axisem.macros 
 source.o: apply_masks.o commun.o data_io.o data_mesh.o data_proc.o \
 	data_source.o data_time.o global_parameters.o nc_routines.o \
@@ -172,7 +172,7 @@ nc_helpers.o: data_io.o data_proc.o global_parameters.o Makefile ../make_axisem.
 nc_routines.o: clocks.o commun.o data_io.o data_mesh.o data_proc.o \
 	data_source.o data_spec.o data_time.o global_parameters.o \
 	nc_helpers.o Makefile ../make_axisem.macros 
-boundary_faces.o: commun.o data_io.o data_mesh.o data_proc.o data_source.o \
+boundary_faces.o: analytic_mapping.o commun.o data_io.o data_mesh.o data_proc.o data_source.o \
 	data_spec.o data_time.o global_parameters.o nc_helpers.o nc_routines.o \
 	utlity.o Makefile ../make_axisem.macros
 nc_snapshots.o: data_io.o data_mesh.o data_proc.o data_source.o \

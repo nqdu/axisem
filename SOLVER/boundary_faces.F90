@@ -4,7 +4,7 @@ module boundary_faces
   use netcdf
 #endif
   use global_parameters
-  use data_io, only: datapath, lfdata, save_bdry_faces
+  use data_io, only: datapath, lfdata, save_bdry_faces, bdry_faces_file
   use data_mesh, only: nelem, nel_solid, nel_fluid, npol, lnods, crd_nodes, axis, &
                        router, ielsolid, ielfluid, eltype, nearest_element_count, &
                        nearest_mesh_elements, solid_element_index, fluid_element_index
@@ -13,8 +13,9 @@ module boundary_faces
   use data_proc, only: mynum, nproc
   use data_time, only: niter, deltat, strain_it
   use data_io, only: nstrain, strain_t0
-  use commun, only: pmin, psum_int, pcheck, barrier, comm_elem_number
+  use commun, only: pmin, pmax, psum_int, pcheck, barrier, comm_elem_number
   use utlity, only: inside_element, compute_coordinates
+  use analytic_mapping, only: mapping
   use nc_helpers, only: check
   implicit none
   private
@@ -40,32 +41,24 @@ contains
     integer :: row, line_count, local_elem, local_count
     integer :: global_nelem, global_first, global_last, first, last, total
     real(kind=dp) :: s, z, phi, local_xi, local_eta, estimated_s, estimated_z
+    real(kind=dp) :: max_location_error_m
     real(kind=dp), allocatable :: location_error_m(:)
     logical, allocatable :: selected(:)
     character(len=512) :: line, errmsg
-    character(len=32) :: input_file
-    logical :: file_exists
 
     if (.not. save_bdry_faces) return
-    input_file = 'boundary_faces.dat'
-    inquire(file=trim(input_file),exist=file_exists)
-    if (.not. file_exists) then
-       input_file = 'boundary_surfaces.dat'
-       inquire(file=trim(input_file),exist=file_exists)
-       if (.not. file_exists) input_file = 'boundar_surfaces.dat'
-    endif
-    open(newunit=io, file=trim(input_file), status='old', action='read', iostat=local_count)
-    call pcheck(local_count /= 0, 'Cannot open boundary_faces.dat, boundary_surfaces.dat, or boundar_surfaces.dat')
+    open(newunit=io, file=trim(bdry_faces_file), status='old', action='read', iostat=local_count)
+    call pcheck(local_count /= 0, 'Cannot open boundary face file: '//trim(bdry_faces_file))
     line_count = 0
     do
        read(io,'(a)',iostat=local_count) line
        if (local_count < 0) exit
-       call pcheck(local_count /= 0, 'Cannot read '//trim(input_file))
+       call pcheck(local_count /= 0, 'Cannot read '//trim(bdry_faces_file))
        if (len_trim(line) == 0 .or. line(1:1) == '#') cycle
        line_count = line_count + 1
     enddo
     call pcheck(line_count == 0 .or. mod(line_count,25) /= 0, &
-                trim(input_file)//' must have 25 rows per face')
+                trim(bdry_faces_file)//' must have 25 rows per face')
     npoints = line_count
     nfaces = npoints / 25
     allocate(longitude(npoints), latitude(npoints), depth_km(npoints), &
@@ -78,7 +71,7 @@ contains
        if (len_trim(line) == 0 .or. line(1:1) == '#') cycle
        row = row + 1
        read(line,*,iostat=local_count) longitude(row), latitude(row), depth_km(row)
-       write(errmsg,'(a,a,a,i0)') 'Invalid ',trim(input_file),' row ',row
+       write(errmsg,'(a,a,a,i0)') 'Invalid ',trim(bdry_faces_file),' row ',row
        call pcheck(local_count /= 0, errmsg)
        call pcheck(abs(latitude(row)) > 90.0_dp .or. depth_km(row) < 0.0_dp .or. &
                    depth_km(row)*1000.0_dp > router, errmsg)
@@ -113,6 +106,7 @@ contains
     allocate(point_id(npoints), element_id(npoints), global_element_id(npoints), &
              point_slot(npoints), point_mesh_index(npoints), location_error_m(npoints))
     nlocal = 0
+    max_location_error_m = 0.0_dp
     do i=1,npoints
        iface = (i-1)/25 + 1
        call coordinates(i,s,z,phi)
@@ -142,6 +136,7 @@ contains
        xi_loc(nlocal) = local_xi
        eta_loc(nlocal) = local_eta
        location_error_m(nlocal) = hypot(s-estimated_s,z-estimated_z)
+       max_location_error_m = max(max_location_error_m,location_error_m(nlocal))
     enddo
     nsolid_local = count(selected(ielsolid))
     nfluid_local = count(selected(ielfluid))
@@ -198,6 +193,14 @@ contains
        call flush(6)
     enddo
     call barrier
+    max_location_error_m = pmax(max_location_error_m)
+    if (mynum == 0) then
+       write(6,'(a,es14.5)') &
+            '  maximum boundary point distance to real location [m]=',max_location_error_m
+       write(6,*)
+       call flush(6)
+    endif
+    call barrier
     deallocate(location_error_m)
     call pcheck(nstrain < 1, 'No boundary samples: adjust DUMP_T0 or simulation length')
     allocate(solid_samples(0:npol,0:npol,3,nsolid_local,min(nstrain,max(1,nc_buffer_size()))))
@@ -249,7 +252,8 @@ contains
     real(kind=dp), intent(out) :: xil,etal,estimated_s,estimated_z
     logical, intent(in), optional :: full_search
     integer :: ie, i, nfound, candidates(nearest_element_count)
-    real(kind=dp) :: x,y,sloc,zloc,err,best,margin
+    real(kind=dp), parameter :: location_tolerance_m = 1.0e-3_dp
+    real(kind=dp) :: x,y,sloc,zloc,err,best,margin,nodes(8,2)
     logical :: inside, scan_all
     elem = 0
     best = huge(1.0_dp)
@@ -274,12 +278,21 @@ contains
        endif
        call inside_element(s,z,ie,x,y,sloc,zloc,inside)
        if (.not. inside) cycle
+       ! The inverse allows slight extrapolation at shared edges. Accept and
+       ! rank candidates using the physical location of the coordinates saved.
+       x = max(-1.0_dp,min(1.0_dp,x))
+       y = max(-1.0_dp,min(1.0_dp,y))
+       nodes(:,1) = crd_nodes(lnods(ie,:),1)
+       nodes(:,2) = crd_nodes(lnods(ie,:),2)
+       sloc = mapping(x,y,nodes,1,ie)
+       zloc = mapping(x,y,nodes,2,ie)
        err = hypot(s-sloc,z-zloc)
+       if (err > location_tolerance_m) cycle
        if (err >= best) cycle
        best = err
        elem = ie
-       xil = max(-1.0_dp,min(1.0_dp,x))
-       etal = max(-1.0_dp,min(1.0_dp,y))
+       xil = x
+       etal = y
        estimated_s = sloc
        estimated_z = zloc
     enddo

@@ -36,6 +36,7 @@ module data_io
   logical           :: dump_xdmf
   logical           :: dump_wavefields 
   logical           :: save_bdry_faces
+  character(len=256) :: bdry_faces_file
   logical           :: checkpointing
   logical           :: diagfiles !< Write diagnostic files (seismograms at antipodes, 
                                  !! list of surface elements, blabla), default: false

@@ -246,15 +246,17 @@ foreach isim  (${srcapp})
     cp $homedir/inparam_advanced .
     set save_bdry = `grep "^SAVE_BDRY_FACES" $homedir/inparam_advanced | awk '{print $2}'`
     if ( "$save_bdry" == "true" ) then
-        if ( -f $homedir/boundary_faces.dat ) then
-            cp $homedir/boundary_faces.dat .
-        else if ( -f $homedir/boundary_surfaces.dat ) then
-            cp $homedir/boundary_surfaces.dat .
-        else if ( -f $homedir/boundar_surfaces.dat ) then
-            cp $homedir/boundar_surfaces.dat .
-        else
-            echo "ERROR: boundary_faces.dat or boundary_surfaces.dat is required by SAVE_BDRY_FACES"
+        set bdry_file = `awk '$1 == "BDRY_FACES_FILE" {print $2; exit}' $homedir/inparam_advanced | tr -d '\042\047'`
+        if ( "$bdry_file" == "" ) set bdry_file = "boundary_faces.dat"
+        set bdry_source = "$bdry_file"
+        if ( "$bdry_file" !~ /* ) set bdry_source = "$homedir/$bdry_file"
+        if ( ! -f "$bdry_source" ) then
+            echo "ERROR: BDRY_FACES_FILE does not exist: $bdry_source"
             exit 1
+        endif
+        if ( "$bdry_file" !~ /* ) then
+            if ( "$bdry_file" =~ */* ) mkdir -p "$bdry_file:h"
+            cp "$bdry_source" "$bdry_file"
         endif
     endif
     cp $homedir/inparam_hetero .

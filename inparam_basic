@@ -37,7 +37,7 @@ LAT_HETEROGENEITY  false
 
 
 # Include viscoelastic attenuation (details in inparam_advanced)
-ATTENUATION         false 
+ATTENUATION         false
 
 ######################## WAVEFIELD SNAPSHOTS ##################################
 # Save wavefield snapshots for visualization (default: false)

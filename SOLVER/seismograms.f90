@@ -235,6 +235,7 @@ end subroutine prepare_seismograms
 subroutine prepare_from_recfile_seis
 
   use utlity
+  use analytic_mapping, only: mapping
   use data_mesh,    only: loc2globrec, dtheta_rec, npol, num_rec_tot, &
                           router, recfile_el, recfile_weights, axis_solid, crd_nodes, lnods, &
                           min_distance_dim, have_epi, num_rec, nearest_element_count, &
@@ -248,7 +249,9 @@ subroutine prepare_from_recfile_seis
   integer                        :: i, iel, ipol, jpol, ielem, irec, num_rec_glob
   integer                        :: candidates(nearest_element_count), ncandidates, icandidate, attempt
   integer                        :: count_diff_loc, count_procs
+  real(kind=dp), parameter       :: location_tolerance_m = 1.0e-3_dp
   real(kind=dp)                  :: recdist, myrecdist, station_depth, target_radius, margin
+  real(kind=dp)                  :: candidate_distance, nodes(8,2)
   real(kind=dp)                  :: xi, etaloc, sloc, zloc, target_s, target_z
   real(kind=dp)                  :: tmprecfile_th, tmprecfile_xi, tmprecfile_eta
   real(kind=dp)                  :: coefficients(0:npol,0:npol), location_error
@@ -485,14 +488,21 @@ subroutine prepare_from_recfile_seis
              ! Invert the element mapping to find the receiver's local xi and eta.
              call inside_element(target_s,target_z,ielem,xi,etaloc,sloc,zloc,in_it)
              if (.not. in_it) cycle
-             if (hypot(target_s-sloc,target_z-zloc) >= recdist) cycle
+             ! Evaluate the coordinates used for interpolation, after clipping.
+             xi = max(-1.0_dp,min(1.0_dp,xi))
+             etaloc = max(-1.0_dp,min(1.0_dp,etaloc))
+             nodes(:,1) = crd_nodes(lnods(ielem,:),1)
+             nodes(:,2) = crd_nodes(lnods(ielem,:),2)
+             sloc = mapping(xi,etaloc,nodes,1,ielem)
+             zloc = mapping(xi,etaloc,nodes,2,ielem)
+             candidate_distance = hypot(target_s-sloc,target_z-zloc)
+             if (candidate_distance > location_tolerance_m .or. candidate_distance >= recdist) cycle
 
-             recdist = hypot(target_s-sloc,target_z-zloc)
+             recdist = candidate_distance
              tmprecfile_th = atan2(sloc,zloc)*180.0_dp/pi
              tmprecfile_el(1) = iel
-             ! Keep interpolation on the reference element when rounding crosses an edge.
-             tmprecfile_xi = max(-1.0_dp,min(1.0_dp,xi))
-             tmprecfile_eta = max(-1.0_dp,min(1.0_dp,etaloc))
+             tmprecfile_xi = xi
+             tmprecfile_eta = etaloc
              ! Retain the nearest GLL index for the existing receiver diagnostics.
              if (axis_solid(iel)) then
                 tmprecfile_el(2) = minloc(abs(xi_k-tmprecfile_xi),dim=1)-1
