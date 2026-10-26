@@ -62,8 +62,8 @@ pure real(kind=dp) function map_spheroid(xil, etal, nodes_crd, idir)
              dcos(half*( (one-xil)*theta_ser(1) +(one+xil)*theta_ser(3) ) ) )
   end if
 
-! mask round-off errors
-  if (abs(map_spheroid) < min_distance_dim) map_spheroid = zero       
+! Coordinates are not masked, so points near the axis or equator can be located.
+! Grid coordinates are rounded to zero in utlity (scoord, zcoord, ...).
 
 end function map_spheroid
 !-----------------------------------------------------------------------------------------

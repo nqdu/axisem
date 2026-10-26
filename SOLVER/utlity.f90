@@ -280,6 +280,10 @@ pure real(kind=dp)    function rcoord(ipol,jpol,ielem)
      z = mapping(eta(ipol),eta(jpol),nodes_crd,2,ielem)
   end if
 
+  ! Eliminate roundoff errors
+  if (abs(s) < min_distance_dim) s=zero
+  if (abs(z) < min_distance_dim) z=zero
+
   rcoord = sqrt(s**2 + z**2)
   ! Eliminate roundoff errors
   if (abs(rcoord) < min_distance_dim) rcoord=zero
@@ -315,6 +319,10 @@ pure real(kind=dp) function thetacoord(ipol,jpol,ielem)
      s = mapping(eta(ipol), eta(jpol), nodes_crd, 1, ielem)
      z = mapping(eta(ipol), eta(jpol), nodes_crd, 2, ielem)
   end if
+
+  ! Eliminate roundoff errors
+  if (abs(s) < min_distance_dim) s=zero
+  if (abs(z) < min_distance_dim) z=zero
 
   thetacoord = datan(s/(z+epsi))
   if ( zero > thetacoord ) thetacoord = pi + thetacoord
